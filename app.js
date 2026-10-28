@@ -1,23 +1,31 @@
-
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+
 import {
   getAuth,
   signInWithEmailAndPassword,
   onAuthStateChanged,
-  signOut
+  signOut,
+  GoogleAuthProvider,
+  OAuthProvider,
+  signInWithPopup
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+
 import {
   getFirestore,
   collection,
   doc,
   addDoc,
+  setDoc,
+  getDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
   query,
   where,
-  serverTimestamp
+  serverTimestamp,
+  runTransaction
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
 import {
   getStorage,
   ref as storageRef,
@@ -25,9 +33,12 @@ import {
   getDownloadURL
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
-/* Rift Diário — configuração original preservada */
+/* =========================================================
+   RIFT DIÁRIO — FIREBASE
+   ========================================================= */
+
 const firebaseConfig = {
-  apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
+  apiKey: "AIzaSyBJrLkf9W9aAVJnrcB7hvYFbsJURBGjQU8M",
   authDomain: "duelosrankeadoswr.firebaseapp.com",
   projectId: "duelosrankeadoswr",
   storageBucket: "duelosrankeadoswr.firebasestorage.app",
@@ -38,32 +49,266 @@ const firebaseConfig = {
 
 const ADMIN_UID = "U7ohORMjr1O9Ubby2WFMztAe8Au2";
 
-const $ = (selector, root = document) => root.querySelector(selector);
-const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
+
 const articlesRef = collection(db, "articles");
+const ratingsRef = collection(db, "articleRatings");
+const commentsRef = collection(db, "articleComments");
+const likesRef = collection(db, "commentLikes");
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [
+  ...root.querySelectorAll(selector)
+];
+
+/* =========================================================
+   ESTADO
+   ========================================================= */
 
 let currentUser = null;
 let isAdmin = false;
+
 let allArticles = [];
 let visibleArticles = [];
+
 let activeCategory = "all";
 let activeAdminTab = "editor";
 let currentArticleId = null;
+
 let inlineMediaDraft = [];
 let uploadInProgress = false;
+
 let unsubscribePublic = null;
 let unsubscribeAdmin = null;
+let unsubscribeRatings = null;
+let unsubscribeComments = null;
+let unsubscribeLikes = null;
+
+let articleRatings = [];
+let articleComments = [];
+let articleLikes = [];
+
+let replyToComment = null;
+let editingCommentId = null;
+
 let toastTimer = null;
 
 const PAGE_SIZE = 9;
 let shownCount = PAGE_SIZE;
 
-/* UTILITÁRIOS */
+/* =========================================================
+   ESTILOS DAS FUNCIONALIDADES DA COMUNIDADE
+   ========================================================= */
+
+function installCommunityStyles() {
+  if ($("#communityStyles")) return;
+
+  const style = document.createElement("style");
+  style.id = "communityStyles";
+
+  style.textContent = `
+    .community-section {
+      margin: 34px 0;
+      padding: 22px;
+      background: var(--panel, #0e1626);
+      border: 1px solid var(--border, #29374d);
+      border-radius: 14px;
+    }
+
+    .community-section h2,
+    .community-section h3 {
+      margin-top: 0;
+    }
+
+    .community-subtitle {
+      color: #aab7ca;
+      font-size: .92rem;
+      line-height: 1.5;
+    }
+
+    .community-actions,
+    .community-share,
+    .community-auth-buttons,
+    .comment-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .community-btn {
+      border: 1px solid var(--border, #29374d);
+      border-radius: 9px;
+      background: var(--panel-light, #151f31);
+      color: #f2f5fa;
+      padding: 10px 14px;
+      cursor: pointer;
+      font: inherit;
+      transition: border-color .2s, transform .2s;
+    }
+
+    .community-btn:hover {
+      border-color: #e0b44c;
+      transform: translateY(-1px);
+    }
+
+    .community-btn:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .community-btn.active {
+      border-color: #e0b44c;
+      color: #f2c85b;
+    }
+
+    .community-btn.danger {
+      color: #ff9999;
+    }
+
+    .community-count {
+      color: #aab7ca;
+      font-size: .88rem;
+    }
+
+    .community-auth-box {
+      margin: 16px 0;
+      padding: 15px;
+      border: 1px solid var(--border, #29374d);
+      border-radius: 10px;
+    }
+
+    .community-auth-box p {
+      margin-top: 0;
+      color: #c4cede;
+      line-height: 1.5;
+    }
+
+    .community-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .community-form textarea {
+      width: 100%;
+      min-height: 105px;
+      resize: vertical;
+      padding: 13px;
+      border: 1px solid var(--border, #29374d);
+      border-radius: 10px;
+      background: #080f1d;
+      color: #f2f5fa;
+      font: inherit;
+      box-sizing: border-box;
+    }
+
+    .community-form textarea:focus {
+      outline: 1px solid #e0b44c;
+      border-color: #e0b44c;
+    }
+
+    .community-comment {
+      padding: 17px 0;
+      border-bottom: 1px solid var(--border, #29374d);
+    }
+
+    .community-comment:last-child {
+      border-bottom: 0;
+    }
+
+    .community-comment.reply {
+      margin: 12px 0 0 20px;
+      padding: 12px 0 0 14px;
+      border-left: 2px solid #35445d;
+    }
+
+    .community-comment-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .community-comment-name {
+      color: #f2c85b;
+      font-weight: 700;
+    }
+
+    .community-comment-date {
+      color: #8796ad;
+      font-size: .8rem;
+    }
+
+    .community-comment-text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.65;
+      color: #e0e6ef;
+    }
+
+    .comment-actions {
+      margin-top: 10px;
+    }
+
+    .comment-actions .community-btn {
+      padding: 6px 10px;
+      font-size: .85rem;
+    }
+
+    .community-notice {
+      margin-top: 12px;
+      color: #aab7ca;
+      font-size: .88rem;
+      line-height: 1.5;
+    }
+
+    .community-share {
+      margin-top: 20px;
+    }
+
+    .community-share a {
+      text-decoration: none;
+    }
+
+    .community-current-user {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 15px;
+      color: #c4cede;
+      font-size: .9rem;
+    }
+
+    .community-empty {
+      color: #aab7ca;
+      padding: 12px 0;
+    }
+
+    @media (max-width: 600px) {
+      .community-section {
+        padding: 15px;
+      }
+
+      .community-comment.reply {
+        margin-left: 10px;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
+/* =========================================================
+   UTILITÁRIOS
+   ========================================================= */
 
 function escapeHTML(value) {
   return String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -137,7 +382,10 @@ function categoryLabel(category) {
 }
 
 function articleDate(article) {
-  return article.publishedAt || article.updatedAt || article.createdAt || null;
+  return article.publishedAt ||
+    article.updatedAt ||
+    article.createdAt ||
+    null;
 }
 
 function sortNewest(list) {
@@ -162,7 +410,144 @@ function normalized(value) {
     .trim();
 }
 
-/* SANITIZAÇÃO DE HTML */
+function friendlyFirestoreError(error, action) {
+  if (error?.code === "permission-denied") {
+    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
+  }
+
+  if (error?.code === "unavailable") {
+    return "O Firebase está indisponível. Confira a conexão e tente novamente.";
+  }
+
+  if (error?.code === "failed-precondition") {
+    return "O Firestore informou uma pré-condição ausente. Confira o Console do navegador.";
+  }
+
+  return `Não foi possível ${action}. Código: ${
+    error?.code || error?.message || "erro desconhecido"
+  }.`;
+}
+
+function canUseCommunity() {
+  if (!currentUser) return false;
+
+  return currentUser.providerData.some(provider =>
+    ["google.com", "apple.com"].includes(provider.providerId)
+  );
+}
+
+function currentDisplayName() {
+  return currentUser?.displayName ||
+    currentUser?.email?.split("@")[0] ||
+    "Jogador";
+}
+
+function currentArticle() {
+  return allArticles.find(article =>
+    article.id === currentArticleId &&
+    article.status === "published"
+  );
+}
+
+function communityUserMessage() {
+  if (!currentUser) {
+    return "Entre com Google ou Apple para participar da comunidade.";
+  }
+
+  if (!canUseCommunity()) {
+    return "Para participar da comunidade, entre com uma conta Google ou Apple.";
+  }
+
+  return "";
+}
+
+/* =========================================================
+   AUTENTICAÇÃO GOOGLE E APPLE
+   ========================================================= */
+
+function ensureCommunityLoginButtons() {
+  const overlay = $("#loginOverlay");
+  if (!overlay) return;
+
+  let host = $("#communityLoginButtons");
+
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "communityLoginButtons";
+    host.className = "community-auth-box";
+
+    host.innerHTML = `
+      <p><strong>Entrar na comunidade</strong></p>
+      <p>Use uma conta Google ou Apple para avaliar matérias e participar dos comentários.</p>
+      <div class="community-auth-buttons">
+        <button type="button" class="community-btn" id="googleLoginBtn">
+          Continuar com Google
+        </button>
+        <button type="button" class="community-btn" id="appleLoginBtn">
+          Continuar com Apple
+        </button>
+      </div>
+    `;
+
+    const form = $("#loginForm", overlay);
+
+    if (form) {
+      form.insertAdjacentElement("afterend", host);
+    } else {
+      overlay.appendChild(host);
+    }
+
+    $("#googleLoginBtn")?.addEventListener("click", () => {
+      signInWithCommunityProvider("google");
+    });
+
+    $("#appleLoginBtn")?.addEventListener("click", () => {
+      signInWithCommunityProvider("apple");
+    });
+  }
+}
+
+async function signInWithCommunityProvider(providerName) {
+  try {
+    let provider;
+
+    if (providerName === "google") {
+      provider = new GoogleAuthProvider();
+      provider.setCustomParameters({
+        prompt: "select_account"
+      });
+    } else {
+      provider = new OAuthProvider("apple.com");
+      provider.addScope("email");
+      provider.addScope("name");
+    }
+
+    await signInWithPopup(auth, provider);
+
+    closeLogin();
+    showToast("Login realizado com sucesso.");
+  } catch (error) {
+    console.error("Erro no login social:", error);
+
+    const messages = {
+      "auth/popup-closed-by-user": "A janela de login foi fechada.",
+      "auth/popup-blocked": "O navegador bloqueou a janela de login.",
+      "auth/unauthorized-domain": "Este domínio não está autorizado no Firebase Authentication.",
+      "auth/operation-not-allowed": "Este provedor ainda não está habilitado no Firebase Authentication.",
+      "auth/account-exists-with-different-credential": "Já existe uma conta com este e-mail usando outro método de login."
+    };
+
+    showToast(
+      messages[error.code] ||
+      `Não foi possível entrar: ${error.message || error.code}`,
+      6000
+    );
+  }
+}
+
+/* =========================================================
+   SANITIZAÇÃO DO CONTEÚDO
+   ========================================================= */
 
 function sanitizeArticleHTML(html) {
   const parser = new DOMParser();
@@ -182,17 +567,9 @@ function sanitizeArticleHTML(html) {
     "width", "height", "loading"
   ]);
 
-  function safeUrl(value, image = false) {
+  function safeUrl(value) {
     const raw = String(value || "").trim();
-
     if (!raw) return "";
-
-    if (
-      image &&
-      /^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)
-    ) {
-      return raw;
-    }
 
     try {
       const url = new URL(raw, window.location.href);
@@ -236,16 +613,11 @@ function sanitizeArticleHTML(html) {
 
         if (!allowedAttrs.has(name)) {
           node.removeAttribute(attr.name);
-        } else if (name === "href") {
+        } else if (name === "href" || name === "src") {
           const url = safeUrl(attr.value);
 
-          if (url) node.setAttribute("href", url);
-          else node.removeAttribute("href");
-        } else if (name === "src") {
-          const url = safeUrl(attr.value, true);
-
-          if (url) node.setAttribute("src", url);
-          else node.removeAttribute("src");
+          if (url) node.setAttribute(name, url);
+          else node.removeAttribute(name);
         }
       }
 
@@ -267,16 +639,13 @@ function sanitizeArticleHTML(html) {
 
 function renderContentSegment(value) {
   const text = String(value || "").trim();
-
   if (!text) return "";
 
   const hasHTML =
     /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code|div|span|section|small|sub|sup|mark)\b[^>]*>/i
       .test(text);
 
-  if (hasHTML) {
-    return sanitizeArticleHTML(text);
-  }
+  if (hasHTML) return sanitizeArticleHTML(text);
 
   return text
     .split(/\n\s*\n/)
@@ -290,7 +659,183 @@ function renderContentSegment(value) {
     .join("");
 }
 
-/* CARTÕES E PÁGINA INICIAL */
+/* =========================================================
+   VÍDEOS
+   ========================================================= */
+
+function buildVideoEmbed(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return "";
+
+  let url;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return "";
+  }
+
+  if (!["https:", "http:"].includes(url.protocol)) return "";
+
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  const parent = location.hostname || "localhost";
+
+  let src = "";
+
+  if ([
+    "youtube.com", "m.youtube.com",
+    "music.youtube.com", "youtube-nocookie.com"
+  ].includes(host)) {
+    let id = url.searchParams.get("v");
+
+    if (!id && ["shorts", "live", "embed", "v"].includes(pathParts[0])) {
+      id = pathParts[1];
+    }
+
+    if (!id || !/^[\w-]{11}$/.test(id)) return "";
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  } else if (host === "youtu.be") {
+    const id = pathParts[0];
+
+    if (!id || !/^[\w-]{11}$/.test(id)) return "";
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  } else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
+    const id =
+      host === "player.vimeo.com" && pathParts[0] === "video"
+        ? pathParts[1]
+        : pathParts[pathParts.length - 1];
+
+    if (!id || !/^\d+$/.test(id)) return "";
+
+    src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
+  } else if (["dailymotion.com", "dai.ly"].includes(host)) {
+    let id = "";
+
+    if (host === "dai.ly") {
+      id = pathParts[0] || "";
+    } else if (pathParts[0] === "video") {
+      id = (pathParts[1] || "").split("_")[0];
+    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
+      id = pathParts[2] || "";
+    }
+
+    if (!id || !/^[A-Za-z0-9]+$/.test(id)) return "";
+
+    src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
+  } else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
+    if (host === "clips.twitch.tv") {
+      const slug = pathParts[0];
+      if (!slug) return "";
+
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(parent)}`;
+    } else if (pathParts[0] === "videos" && /^\d+$/.test(pathParts[1] || "")) {
+      src = `https://player.twitch.tv/?video=v${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (pathParts[0] === "clip" && pathParts[1]) {
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (
+      pathParts[0] &&
+      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"].includes(pathParts[0].toLowerCase())
+    ) {
+      src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
+    } else {
+      return "";
+    }
+  } else if (["kick.com", "player.kick.com"].includes(host)) {
+    const channel = pathParts[0];
+
+    if (!channel || ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())) {
+      return "";
+    }
+
+    src = `https://player.kick.com/${encodeURIComponent(channel)}`;
+  } else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
+    return `
+      <div class="article-video">
+        <video controls playsinline preload="metadata">
+          <source src="${escapeHTML(url.href)}">
+          Seu navegador não conseguiu reproduzir este vídeo.
+        </video>
+      </div>
+    `;
+  } else {
+    return "";
+  }
+
+  return `
+    <div class="article-video">
+      <iframe
+        src="${escapeHTML(src)}"
+        title="Vídeo da matéria"
+        loading="lazy"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+  `;
+}
+
+function renderArticleBody(content, media = []) {
+  const byId = new Map(
+    (Array.isArray(media) ? media : []).map(item => [item.id, item])
+  );
+
+  const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
+  const source = String(content || "");
+
+  let html = "";
+  let cursor = 0;
+  let match;
+
+  while ((match = markerPattern.exec(source)) !== null) {
+    html += renderContentSegment(source.slice(cursor, match.index));
+
+    const item = byId.get(match[1]);
+
+    if (item?.url) {
+      if (item.type === "image") {
+        html += `
+          <figure class="article-inline-media">
+            <img
+              src="${escapeHTML(item.url)}"
+              alt="${escapeHTML(item.caption || "Imagem da matéria")}"
+              loading="lazy"
+            >
+            ${item.caption ? `<figcaption>${escapeHTML(item.caption)}</figcaption>` : ""}
+          </figure>
+        `;
+      } else if (item.type === "video-upload") {
+        html += `
+          <div class="article-video article-inline-media">
+            <video controls playsinline preload="metadata">
+              <source src="${escapeHTML(item.url)}">
+              Seu navegador não conseguiu reproduzir este vídeo.
+            </video>
+            ${item.caption ? `<p class="media-caption">${escapeHTML(item.caption)}</p>` : ""}
+          </div>
+        `;
+      } else {
+        html += buildVideoEmbed(item.url);
+
+        if (item.caption) {
+          html += `<p class="media-caption">${escapeHTML(item.caption)}</p>`;
+        }
+      }
+    }
+
+    cursor = markerPattern.lastIndex;
+  }
+
+  html += renderContentSegment(source.slice(cursor));
+  return html;
+}
+
+/* =========================================================
+   CARTÕES E PÁGINA INICIAL
+   ========================================================= */
 
 function articleCard(article) {
   const image = article.image
@@ -402,200 +947,664 @@ function renderHome() {
   }
 }
 
-/* PLAYERS DE VÍDEO */
+/* =========================================================
+   AVALIAÇÕES DAS MATÉRIAS
+   ========================================================= */
 
-function buildVideoEmbed(rawUrl) {
-  const value = String(rawUrl || "").trim();
+function ratingDocumentId(articleId, uid) {
+  return `${articleId}_${uid}`;
+}
 
-  if (!value) return "";
+function myRating() {
+  if (!currentUser || !currentArticleId) return null;
 
-  let url;
+  return articleRatings.find(rating => rating.uid === currentUser.uid) || null;
+}
 
-  try {
-    url = new URL(value);
-  } catch {
-    return "";
-  }
+function renderRatingSection() {
+  const host = $("#articleRatings");
+  if (!host) return;
 
-  if (!["https:", "http:"].includes(url.protocol)) return "";
+  const positive = articleRatings.filter(item => item.value === "positive").length;
+  const negative = articleRatings.filter(item => item.value === "negative").length;
+  const mine = myRating();
 
-  const host = url.hostname.toLowerCase().replace(/^www\./, "");
-  const pathParts = url.pathname.split("/").filter(Boolean);
+  host.innerHTML = `
+    <section class="community-section" aria-label="Avaliação da matéria">
+      <h2>O que você achou desta matéria?</h2>
+      <p class="community-subtitle">
+        Sua avaliação ajuda a comunidade do Rift Diário.
+      </p>
 
-  let src = "";
-  const parent = location.hostname || "localhost";
+      <div class="community-actions">
+        <button
+          type="button"
+          class="community-btn ${mine?.value === "positive" ? "active" : ""}"
+          data-rate="positive"
+          aria-pressed="${mine?.value === "positive" ? "true" : "false"}"
+        >👍 Gostei <span class="community-count">${positive}</span></button>
 
-  // YouTube: links comuns, Shorts, lives e links de incorporação.
-  if ([
-    "youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtube-nocookie.com"
-  ].includes(host)) {
-    let id = url.searchParams.get("v");
+        <button
+          type="button"
+          class="community-btn ${mine?.value === "negative" ? "active" : ""}"
+          data-rate="negative"
+          aria-pressed="${mine?.value === "negative" ? "true" : "false"}"
+        >👎 Não gostei <span class="community-count">${negative}</span></button>
 
-    if (!id && ["shorts", "live", "embed", "v"].includes(pathParts[0])) {
-      id = pathParts[1];
-    }
-
-    if (!id || !/^[\w-]{11}$/.test(id)) return "";
-
-    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
-  } else if (host === "youtu.be") {
-    const id = pathParts[0];
-
-    if (!id || !/^[\w-]{11}$/.test(id)) return "";
-
-    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
-  }
-
-  // Vimeo.
-  else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
-    const id =
-      host === "player.vimeo.com" && pathParts[0] === "video"
-        ? pathParts[1]
-        : pathParts[pathParts.length - 1];
-
-    if (!id || !/^\d+$/.test(id)) return "";
-
-    src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
-  }
-
-  // Dailymotion.
-  else if (["dailymotion.com", "dai.ly"].includes(host)) {
-    let id = "";
-
-    if (host === "dai.ly") {
-      id = pathParts[0] || "";
-    } else if (pathParts[0] === "video") {
-      id = (pathParts[1] || "").split("_")[0];
-    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
-      id = pathParts[2] || "";
-    }
-
-    if (!id || !/^[A-Za-z0-9]+$/.test(id)) return "";
-
-    src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
-  }
-
-  // Twitch.
-  else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
-    if (host === "clips.twitch.tv") {
-      const slug = pathParts[0];
-
-      if (!slug) return "";
-
-      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(parent)}`;
-    } else if (pathParts[0] === "videos" && /^\d+$/.test(pathParts[1] || "")) {
-      src = `https://player.twitch.tv/?video=v${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
-    } else if (pathParts[0] === "clip" && pathParts[1]) {
-      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
-    } else if (
-      pathParts[0] &&
-      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"].includes(pathParts[0].toLowerCase())
-    ) {
-      src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
-    } else {
-      return "";
-    }
-  }
-
-  // Kick.
-  else if (["kick.com", "player.kick.com"].includes(host)) {
-    const channel = pathParts[0];
-
-    if (!channel || ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())) {
-      return "";
-    }
-
-    src = `https://player.kick.com/${encodeURIComponent(channel)}`;
-  }
-
-  // Vídeo hospedado diretamente em um endereço MP4, WebM ou OGG.
-  else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
-    return `
-      <div class="article-video">
-        <video controls playsinline preload="metadata">
-          <source src="${escapeHTML(url.href)}">
-          Seu navegador não conseguiu reproduzir este vídeo.
-        </video>
+        ${
+          mine
+            ? `<button type="button" class="community-btn danger" data-remove-rating>Remover minha avaliação</button>`
+            : ""
+        }
       </div>
-    `;
-  } else {
-    return "";
-  }
 
-  return `
-    <div class="article-video">
-      <iframe
-        src="${escapeHTML(src)}"
-        title="Vídeo da matéria"
-        loading="lazy"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        referrerpolicy="strict-origin-when-cross-origin"
-        allowfullscreen
-      ></iframe>
-    </div>
+      ${
+        !currentUser
+          ? `<p class="community-notice">Entre com Google ou Apple para avaliar.</p>`
+          : !canUseCommunity()
+            ? `<p class="community-notice">Entre com Google ou Apple para avaliar.</p>`
+            : ""
+      }
+    </section>
   `;
 }
 
-function renderArticleBody(content, media = []) {
-  const byId = new Map(
-    (Array.isArray(media) ? media : []).map(item => [item.id, item])
+async function setMyRating(value) {
+  if (!currentArticleId || !currentUser) {
+    openLogin();
+    showToast("Entre com Google ou Apple para avaliar esta matéria.");
+    return;
+  }
+
+  if (!canUseCommunity()) {
+    openLogin();
+    showToast("Use Google ou Apple para avaliar matérias.");
+    return;
+  }
+
+  const id = ratingDocumentId(currentArticleId, currentUser.uid);
+  const ref = doc(db, "articleRatings", id);
+
+  try {
+    await runTransaction(db, async transaction => {
+      const snapshot = await transaction.get(ref);
+
+      if (snapshot.exists() && snapshot.data().value === value) {
+        transaction.delete(ref);
+      } else {
+        transaction.set(ref, {
+          articleId: currentArticleId,
+          uid: currentUser.uid,
+          value,
+          updatedAt: serverTimestamp()
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Erro ao registrar avaliação:", error);
+    showToast(friendlyFirestoreError(error, "registrar sua avaliação"), 6000);
+  }
+}
+
+async function removeMyRating() {
+  if (!currentArticleId || !currentUser) return;
+
+  const id = ratingDocumentId(currentArticleId, currentUser.uid);
+
+  try {
+    await deleteDoc(doc(db, "articleRatings", id));
+    showToast("Sua avaliação foi removida.");
+  } catch (error) {
+    console.error("Erro ao remover avaliação:", error);
+    showToast(friendlyFirestoreError(error, "remover sua avaliação"), 6000);
+  }
+}
+
+function startRatingsListener(articleId) {
+  if (unsubscribeRatings) {
+    unsubscribeRatings();
+    unsubscribeRatings = null;
+  }
+
+  articleRatings = [];
+
+  const q = query(
+    ratingsRef,
+    where("articleId", "==", articleId)
   );
 
-  const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
-  const source = String(content || "");
+  unsubscribeRatings = onSnapshot(
+    q,
+    snapshot => {
+      articleRatings = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
 
-  let html = "";
-  let cursor = 0;
-  let match;
+      renderRatingSection();
+    },
+    error => {
+      console.error("Erro ao carregar avaliações:", error);
+      showToast(friendlyFirestoreError(error, "carregar avaliações"), 5000);
+    }
+  );
+}
 
-  while ((match = markerPattern.exec(source)) !== null) {
-    html += renderContentSegment(source.slice(cursor, match.index));
+/* =========================================================
+   COMENTÁRIOS E RESPOSTAS
+   ========================================================= */
 
-    const item = byId.get(match[1]);
+function commentDate(comment) {
+  return comment.createdAt || comment.updatedAt || null;
+}
 
-    if (item?.url) {
-      if (item.type === "image") {
-        html += `
-          <figure class="article-inline-media">
-            <img
-              src="${escapeHTML(item.url)}"
-              alt="${escapeHTML(item.caption || "Imagem da matéria")}"
-              loading="lazy"
-            >
-            ${item.caption ? `<figcaption>${escapeHTML(item.caption)}</figcaption>` : ""}
-          </figure>
-        `;
-      } else if (item.type === "video-upload") {
-        html += `
-          <div class="article-video article-inline-media">
-            <video controls playsinline preload="metadata">
-              <source src="${escapeHTML(item.url)}">
-              Seu navegador não conseguiu reproduzir este vídeo.
-            </video>
-            ${item.caption ? `<p class="media-caption">${escapeHTML(item.caption)}</p>` : ""}
-          </div>
-        `;
-      } else {
-        html += buildVideoEmbed(item.url);
+function sortedComments() {
+  return [...articleComments].sort((a, b) => {
+    const da = commentDate(a)?.toDate
+      ? commentDate(a).toDate().getTime()
+      : new Date(commentDate(a) || 0).getTime();
 
-        if (item.caption) {
-          html += `<p class="media-caption">${escapeHTML(item.caption)}</p>`;
+    const dbDate = commentDate(b)?.toDate
+      ? commentDate(b).toDate().getTime()
+      : new Date(commentDate(b) || 0).getTime();
+
+    return da - dbDate;
+  });
+}
+
+function renderComment(comment, isReply = false) {
+  const mine = currentUser && comment.uid === currentUser.uid;
+  const likeCount = articleLikes.filter(like => like.commentId === comment.id).length;
+  const likedByMe = currentUser && articleLikes.some(
+    like => like.commentId === comment.id && like.uid === currentUser.uid
+  );
+
+  const editing = editingCommentId === comment.id;
+
+  return `
+    <article class="community-comment ${isReply ? "reply" : ""}" data-comment-id="${escapeHTML(comment.id)}">
+      <div class="community-comment-header">
+        <span class="community-comment-name">${escapeHTML(comment.displayName || "Jogador")}</span>
+        <span class="community-comment-date">${escapeHTML(formatDate(commentDate(comment)))}</span>
+      </div>
+
+      ${
+        editing
+          ? `
+            <form class="community-form" data-edit-comment="${escapeHTML(comment.id)}">
+              <textarea name="commentText" maxlength="3000" required>${escapeHTML(comment.text || "")}</textarea>
+              <div class="comment-actions">
+                <button type="submit" class="community-btn">Salvar edição</button>
+                <button type="button" class="community-btn" data-cancel-edit>Cancelar</button>
+              </div>
+            </form>
+          `
+          : `<div class="community-comment-text">${escapeHTML(comment.text || "")}</div>`
+      }
+
+      ${
+        !editing
+          ? `
+            <div class="comment-actions">
+              <button
+                type="button"
+                class="community-btn ${likedByMe ? "active" : ""}"
+                data-like-comment="${escapeHTML(comment.id)}"
+                aria-pressed="${likedByMe ? "true" : "false"}"
+              >♥ Curtir ${likeCount}</button>
+
+              ${
+                !isReply
+                  ? `<button type="button" class="community-btn" data-reply-comment="${escapeHTML(comment.id)}">Responder</button>`
+                  : ""
+              }
+
+              ${
+                mine
+                  ? `
+                    <button type="button" class="community-btn" data-edit-comment-button="${escapeHTML(comment.id)}">Editar</button>
+                    <button type="button" class="community-btn danger" data-delete-comment="${escapeHTML(comment.id)}">Excluir</button>
+                  `
+                  : ""
+              }
+            </div>
+          `
+          : ""
+      }
+
+      <div class="community-replies" data-replies-for="${escapeHTML(comment.id)}"></div>
+    </article>
+  `;
+}
+
+function renderCommentsSection() {
+  const host = $("#articleComments");
+  if (!host) return;
+
+  const roots = sortedComments().filter(comment => !comment.parentId);
+  const message = communityUserMessage();
+
+  host.innerHTML = `
+    <section class="community-section" aria-label="Comentários">
+      <h2>Comentários da comunidade</h2>
+      <p class="community-subtitle">
+        Compartilhe sua opinião e converse com outros jogadores.
+      </p>
+
+      ${
+        currentUser
+          ? `
+            <div class="community-current-user">
+              <span>Conectado como ${escapeHTML(currentDisplayName())}</span>
+              <button type="button" class="community-btn" id="communityLogoutBtn">Sair da comunidade</button>
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        message
+          ? `
+            <div class="community-auth-box">
+              <p>${escapeHTML(message)}</p>
+              <div class="community-auth-buttons">
+                <button type="button" class="community-btn" data-community-login="google">Entrar com Google</button>
+                <button type="button" class="community-btn" data-community-login="apple">Entrar com Apple</button>
+              </div>
+            </div>
+          `
+          : `
+            <form class="community-form" id="newCommentForm">
+              <textarea
+                name="commentText"
+                maxlength="3000"
+                placeholder="Escreva seu comentário..."
+                required
+              ></textarea>
+              <button type="submit" class="community-btn">Publicar comentário</button>
+            </form>
+          `
+      }
+
+      ${
+        replyToComment
+          ? `
+            <p class="community-notice">
+              Você está respondendo a um comentário.
+              <button type="button" class="community-btn" data-cancel-reply>Cancelar resposta</button>
+            </p>
+          `
+          : ""
+      }
+
+      <div id="communityCommentList">
+        ${
+          roots.length
+            ? roots.map(comment => renderComment(comment)).join("")
+            : `<p class="community-empty">Ainda não há comentários. Seja o primeiro a participar!</p>`
         }
+      </div>
+    </section>
+  `;
+
+  // Renderiza as respostas junto dos respectivos comentários.
+  for (const root of roots) {
+    const replies = sortedComments().filter(comment => comment.parentId === root.id);
+    const repliesHost = $(`[data-replies-for="${CSS.escape(root.id)}"]`, host);
+
+    if (repliesHost && replies.length) {
+      repliesHost.innerHTML = replies.map(reply => renderComment(reply, true)).join("");
+    }
+  }
+}
+
+function startCommentsListener(articleId) {
+  if (unsubscribeComments) {
+    unsubscribeComments();
+    unsubscribeComments = null;
+  }
+
+  articleComments = [];
+
+  const q = query(
+    commentsRef,
+    where("articleId", "==", articleId)
+  );
+
+  unsubscribeComments = onSnapshot(
+    q,
+    snapshot => {
+      articleComments = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      renderCommentsSection();
+    },
+    error => {
+      console.error("Erro ao carregar comentários:", error);
+      showToast(friendlyFirestoreError(error, "carregar comentários"), 5000);
+    }
+  );
+}
+
+function startLikesListener(articleId) {
+  if (unsubscribeLikes) {
+    unsubscribeLikes();
+    unsubscribeLikes = null;
+  }
+
+  articleLikes = [];
+
+  const q = query(
+    likesRef,
+    where("articleId", "==", articleId)
+  );
+
+  unsubscribeLikes = onSnapshot(
+    q,
+    snapshot => {
+      articleLikes = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      renderCommentsSection();
+    },
+    error => {
+      console.error("Erro ao carregar curtidas:", error);
+    }
+  );
+}
+
+async function createComment(text, parentId = null) {
+  const cleanText = String(text || "").trim();
+
+  if (!cleanText) {
+    showToast("Escreva um comentário antes de publicar.");
+    return;
+  }
+
+  if (cleanText.length > 3000) {
+    showToast("O comentário ultrapassou o limite de 3.000 caracteres.");
+    return;
+  }
+
+  if (!currentUser || !canUseCommunity()) {
+    openLogin();
+    showToast("Entre com Google ou Apple para comentar.");
+    return;
+  }
+
+  if (!currentArticleId) return;
+
+  try {
+    await addDoc(commentsRef, {
+      articleId: currentArticleId,
+      uid: currentUser.uid,
+      displayName: currentDisplayName(),
+      text: cleanText,
+      parentId: parentId || null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    replyToComment = null;
+    showToast(parentId ? "Resposta publicada." : "Comentário publicado.");
+  } catch (error) {
+    console.error("Erro ao publicar comentário:", error);
+    showToast(friendlyFirestoreError(error, "publicar comentário"), 6000);
+  }
+}
+
+async function updateComment(commentId, text) {
+  const comment = articleComments.find(item => item.id === commentId);
+  const cleanText = String(text || "").trim();
+
+  if (!comment || !currentUser || comment.uid !== currentUser.uid) {
+    showToast("Você só pode editar seus próprios comentários.");
+    return;
+  }
+
+  if (!cleanText) {
+    showToast("O comentário não pode ficar vazio.");
+    return;
+  }
+
+  if (cleanText.length > 3000) {
+    showToast("O comentário ultrapassou o limite de 3.000 caracteres.");
+    return;
+  }
+
+  try {
+    await updateDoc(doc(db, "articleComments", commentId), {
+      text: cleanText,
+      updatedAt: serverTimestamp()
+    });
+
+    editingCommentId = null;
+    showToast("Comentário atualizado.");
+  } catch (error) {
+    console.error("Erro ao editar comentário:", error);
+    showToast(friendlyFirestoreError(error, "editar comentário"), 6000);
+  }
+}
+
+async function deleteComment(commentId) {
+  const comment = articleComments.find(item => item.id === commentId);
+
+  if (!comment || !currentUser || comment.uid !== currentUser.uid) {
+    showToast("Você só pode excluir seus próprios comentários.");
+    return;
+  }
+
+  if (!confirm("Deseja excluir este comentário?")) return;
+
+  try {
+    // Remove também as respostas do comentário principal.
+    if (!comment.parentId) {
+      const replies = articleComments.filter(item => item.parentId === commentId);
+
+      for (const reply of replies) {
+        await deleteDoc(doc(db, "articleComments", reply.id));
       }
     }
 
-    cursor = markerPattern.lastIndex;
+    // Remove as curtidas vinculadas ao comentário.
+    const relatedLikes = articleLikes.filter(item => item.commentId === commentId);
+
+    for (const like of relatedLikes) {
+      await deleteDoc(doc(db, "commentLikes", like.id));
+    }
+
+    await deleteDoc(doc(db, "articleComments", commentId));
+    showToast("Comentário excluído.");
+  } catch (error) {
+    console.error("Erro ao excluir comentário:", error);
+    showToast(friendlyFirestoreError(error, "excluir comentário"), 6000);
   }
-
-  html += renderContentSegment(source.slice(cursor));
-
-  return html;
 }
 
-/* NAVEGAÇÃO E MATÉRIAS */
+async function toggleCommentLike(commentId) {
+  if (!currentUser || !canUseCommunity()) {
+    openLogin();
+    showToast("Entre com Google ou Apple para curtir comentários.");
+    return;
+  }
+
+  const id = `${commentId}_${currentUser.uid}`;
+  const ref = doc(db, "commentLikes", id);
+
+  try {
+    const snapshot = await getDoc(ref);
+
+    if (snapshot.exists()) {
+      await deleteDoc(ref);
+    } else {
+      await setDoc(ref, {
+        articleId: currentArticleId,
+        commentId,
+        uid: currentUser.uid,
+        createdAt: serverTimestamp()
+      });
+    }
+  } catch (error) {
+    console.error("Erro ao curtir comentário:", error);
+    showToast(friendlyFirestoreError(error, "curtir comentário"), 6000);
+  }
+}
+
+/* =========================================================
+   COMPARTILHAMENTO
+   ========================================================= */
+
+function articleShareUrl() {
+  const article = currentArticle();
+
+  if (!article) return location.href;
+
+  const url = new URL(location.href);
+  url.hash = `artigo/${encodeURIComponent(article.id)}`;
+
+  return url.href;
+}
+
+function articleShareText() {
+  const article = currentArticle();
+
+  return article
+    ? `${article.title} — Rift Diário`
+    : "Confira as notícias do Rift Diário";
+}
+
+async function copyArticleLink() {
+  const url = articleShareUrl();
+
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("Link da matéria copiado.");
+  } catch {
+    const input = document.createElement("textarea");
+    input.value = url;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.appendChild(input);
+    input.select();
+
+    const copied = document.execCommand("copy");
+    input.remove();
+
+    showToast(
+      copied
+        ? "Link da matéria copiado."
+        : "Não foi possível copiar o link automaticamente."
+    );
+  }
+}
+
+async function shareNative() {
+  const url = articleShareUrl();
+  const text = articleShareText();
+
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: text,
+        text,
+        url
+      });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        showToast("Não foi possível abrir o compartilhamento.");
+      }
+    }
+  } else {
+    await copyArticleLink();
+  }
+}
+
+function renderShareSection() {
+  const host = $("#articleShare");
+  if (!host) return;
+
+  const url = articleShareUrl();
+  const text = articleShareText();
+
+  const whatsappUrl =
+    `https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`;
+
+  const facebookUrl =
+    `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`;
+
+  host.innerHTML = `
+    <section class="community-section" aria-label="Compartilhar matéria">
+      <h2>Compartilhe esta matéria</h2>
+      <p class="community-subtitle">
+        Ajude outros jogadores a encontrar as notícias do Rift Diário.
+      </p>
+
+      <div class="community-share">
+        <a
+          class="community-btn"
+          href="${escapeHTML(whatsappUrl)}"
+          target="_blank"
+          rel="noopener noreferrer"
+        >WhatsApp</a>
+
+        <a
+          class="community-btn"
+          href="${escapeHTML(facebookUrl)}"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Facebook</a>
+
+        <button type="button" class="community-btn" id="shareInstagramBtn">
+          Instagram
+        </button>
+
+        <button type="button" class="community-btn" id="nativeShareBtn">
+          Compartilhar…
+        </button>
+
+        <button type="button" class="community-btn" id="copyArticleLinkBtn">
+          Copiar link
+        </button>
+      </div>
+
+      <p class="community-notice">
+        O Instagram não oferece compartilhamento direto de links de matérias
+        por um botão comum de site. Use o botão de compartilhamento do celular
+        ou copie o link para publicá-lo no Instagram.
+      </p>
+    </section>
+  `;
+
+  $("#shareInstagramBtn")?.addEventListener("click", async () => {
+    if (navigator.share) {
+      await shareNative();
+    } else {
+      await copyArticleLink();
+      showToast("Cole o link na publicação, mensagem ou bio do Instagram.");
+    }
+  });
+
+  $("#nativeShareBtn")?.addEventListener("click", shareNative);
+  $("#copyArticleLinkBtn")?.addEventListener("click", copyArticleLink);
+}
+
+/* =========================================================
+   PÁGINA DA MATÉRIA
+   ========================================================= */
+
+function stopArticleListeners() {
+  if (unsubscribeRatings) unsubscribeRatings();
+  if (unsubscribeComments) unsubscribeComments();
+  if (unsubscribeLikes) unsubscribeLikes();
+
+  unsubscribeRatings = null;
+  unsubscribeComments = null;
+  unsubscribeLikes = null;
+}
 
 function openArticle(id) {
   const article = allArticles.find(
@@ -606,6 +1615,15 @@ function openArticle(id) {
     showToast("Esta notícia não está disponível ou ainda não foi publicada.");
     return;
   }
+
+  stopArticleListeners();
+
+  currentArticleId = id;
+  articleRatings = [];
+  articleComments = [];
+  articleLikes = [];
+  replyToComment = null;
+  editingCommentId = null;
 
   $("#homeView")?.classList.add("hidden");
   $("#adminPanel")?.classList.add("hidden");
@@ -628,6 +1646,7 @@ function openArticle(id) {
         ${escapeHTML(categoryLabel(article.category))} ·
         ${escapeHTML(gameLabel(article.game))}
       </span>
+
       <h1>${escapeHTML(article.title)}</h1>
       <p class="article-summary">${escapeHTML(article.summary)}</p>
       <div class="meta">${escapeHTML(formatDate(articleDate(article)))}</div>
@@ -646,13 +1665,29 @@ function openArticle(id) {
     <p class="source-note">
       Conteúdo do Rift Diário. Imagens e materiais de terceiros pertencem aos seus respectivos titulares.
     </p>
+
+    <div id="articleRatings"></div>
+    <div id="articleShare"></div>
+    <div id="articleComments"></div>
   `;
 
   history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
   window.scrollTo({ top: 0, behavior: "smooth" });
+
+  startRatingsListener(id);
+  startCommentsListener(id);
+  startLikesListener(id);
+
+  renderRatingSection();
+  renderShareSection();
+  renderCommentsSection();
 }
 
 function goHome() {
+  stopArticleListeners();
+
+  currentArticleId = null;
+
   $("#articleView")?.classList.add("hidden");
   $("#homeView")?.classList.remove("hidden");
 
@@ -664,6 +1699,10 @@ function goHome() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+/* =========================================================
+   LOGIN ADMINISTRATIVO
+   ========================================================= */
+
 function openLogin() {
   const overlay = $("#loginOverlay");
 
@@ -672,6 +1711,7 @@ function openLogin() {
     return;
   }
 
+  ensureCommunityLoginButtons();
   setLoginError("");
   overlay.classList.remove("hidden");
 
@@ -693,11 +1733,12 @@ function requireAdmin() {
   return true;
 }
 
-/* PAINEL ADMINISTRATIVO */
+/* =========================================================
+   PAINEL ADMINISTRATIVO
+   ========================================================= */
 
 function setAdminTab(tab) {
   const validTabs = ["editor", "review", "manage"];
-
   if (!validTabs.includes(tab)) return;
 
   activeAdminTab = tab;
@@ -743,7 +1784,6 @@ function resetArticleForm() {
 
 function fillEditor(id) {
   const article = allArticles.find(item => item.id === id);
-
   if (!article) return;
 
   currentArticleId = id;
@@ -783,11 +1823,12 @@ function fillEditor(id) {
   });
 }
 
-/* INSERÇÃO DE IMAGENS E VÍDEOS */
+/* =========================================================
+   INSERÇÃO DE MÍDIAS NO TEXTO
+   ========================================================= */
 
 function insertMarkerAtCursor(id) {
   const field = $("#articleContent");
-
   if (!field) return;
 
   const marker = `\n\n[[MEDIA:${id}]]\n\n`;
@@ -815,7 +1856,6 @@ function insertMarkerAtCursor(id) {
 
 function renderInlineMediaManager() {
   const host = $("#inlineMediaList");
-
   if (!host) return;
 
   host.innerHTML = inlineMediaDraft.length
@@ -845,7 +1885,6 @@ function renderInlineMediaManager() {
 
 function updateInlinePreview() {
   const host = $("#inlineMediaPreview");
-
   if (!host) return;
 
   const content = $("#articleContent")?.value || "";
@@ -854,8 +1893,6 @@ function updateInlinePreview() {
     renderArticleBody(content, inlineMediaDraft) ||
     `<p class="form-hint">A prévia da matéria com mídias aparecerá aqui.</p>`;
 }
-
-/* UPLOAD COM PROGRESSO E TRATAMENTO DE ERROS */
 
 async function uploadInlineFile(file, type) {
   if (!file) return;
@@ -926,9 +1963,7 @@ async function uploadInlineFile(file, type) {
         "state_changed",
         snapshot => {
           const percent = snapshot.totalBytes
-            ? Math.round(
-                snapshot.bytesTransferred / snapshot.totalBytes * 100
-              )
+            ? Math.round(snapshot.bytesTransferred / snapshot.totalBytes * 100)
             : 0;
 
           showToast(
@@ -936,7 +1971,7 @@ async function uploadInlineFile(file, type) {
             2500
           );
         },
-        error => reject(error),
+        reject,
         async () => {
           try {
             resolve(await getDownloadURL(task.snapshot.ref));
@@ -964,33 +1999,24 @@ async function uploadInlineFile(file, type) {
     renderInlineMediaManager();
     updateInlinePreview();
 
-    showToast(
-      `${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`
-    );
+    showToast(`${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`);
   } catch (error) {
     console.error("Erro no upload do Firebase Storage:", error);
 
     const messages = {
-      "storage/unauthorized":
-        "O Firebase Storage recusou o envio. Confira as regras de acesso.",
-      "storage/canceled":
-        "O envio foi cancelado.",
-      "storage/retry-limit-exceeded":
-        "O limite de tentativas foi atingido. Confira sua conexão.",
-      "storage/quota-exceeded":
-        "A cota de armazenamento do Firebase foi excedida.",
-      "storage/unknown":
-        "Erro desconhecido no Storage. Consulte o Console do navegador."
+      "storage/unauthorized": "O Firebase Storage recusou o envio. Confira as regras.",
+      "storage/canceled": "O envio foi cancelado.",
+      "storage/retry-limit-exceeded": "O limite de tentativas foi atingido. Confira sua conexão.",
+      "storage/quota-exceeded": "A cota de armazenamento foi excedida."
     };
 
     showToast(
       messages[error?.code] ||
-        `Falha no upload: ${error?.code || error?.message || "erro desconhecido"}`,
+      `Falha no upload: ${error?.code || error?.message || "erro desconhecido"}`,
       8000
     );
   } finally {
     uploadInProgress = false;
-
     buttons.forEach(button => {
       button.disabled = false;
     });
@@ -1034,7 +2060,6 @@ function insertVideoLinkAtCursor() {
   renderInlineMediaManager();
 
   input.value = "";
-
   showToast("Vídeo inserido no ponto do cursor.");
 }
 
@@ -1054,7 +2079,9 @@ function removeInlineMedia(id) {
   updateInlinePreview();
 }
 
-/* SALVAMENTO DAS MATÉRIAS */
+/* =========================================================
+   SALVAMENTO DE MATÉRIAS
+   ========================================================= */
 
 function articleFromForm(status, existingArticle = null) {
   const payload = {
@@ -1092,7 +2119,6 @@ async function saveArticle(event, status) {
   if (!requireAdmin()) return;
 
   const form = $("#articleForm");
-
   if (!form.reportValidity()) return;
 
   const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
@@ -1110,8 +2136,9 @@ async function saveArticle(event, status) {
     return;
   }
 
-  const existingArticle = currentArticleId
-    ? allArticles.find(article => article.id === currentArticleId)
+  const editingId = currentArticleId;
+  const existingArticle = editingId
+    ? allArticles.find(article => article.id === editingId)
     : null;
 
   const payload = articleFromForm(status, existingArticle);
@@ -1123,11 +2150,8 @@ async function saveArticle(event, status) {
   }
 
   try {
-    if (currentArticleId) {
-      await updateDoc(
-        doc(db, "articles", currentArticleId),
-        payload
-      );
+    if (editingId) {
+      await updateDoc(doc(db, "articles", editingId), payload);
 
       showToast(
         status === "published"
@@ -1150,12 +2174,8 @@ async function saveArticle(event, status) {
     resetArticleForm();
     setAdminTab(status === "draft" ? "review" : "manage");
   } catch (error) {
-    console.error("Erro ao salvar matéria no Firestore:", error);
-
-    showToast(
-      friendlyFirestoreError(error, "salvar a matéria"),
-      6000
-    );
+    console.error("Erro ao salvar matéria:", error);
+    showToast(friendlyFirestoreError(error, "salvar a matéria"), 6000);
   } finally {
     if (button) {
       button.disabled = false;
@@ -1166,23 +2186,9 @@ async function saveArticle(event, status) {
   }
 }
 
-function friendlyFirestoreError(error, action) {
-  if (error?.code === "permission-denied") {
-    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
-  }
-
-  if (error?.code === "unavailable") {
-    return "O Firebase está indisponível. Confira a conexão e tente novamente.";
-  }
-
-  if (error?.code === "failed-precondition") {
-    return "O Firestore informou uma pré-condição ausente. Veja o Console do navegador.";
-  }
-
-  return `Não foi possível ${action}. Código: ${error?.code || error?.message || "erro desconhecido"}.`;
-}
-
-/* FILAS DO PAINEL ADMINISTRATIVO */
+/* =========================================================
+   FILAS ADMINISTRATIVAS
+   ========================================================= */
 
 function adminItem(article, mode) {
   const image = article.image
@@ -1226,7 +2232,6 @@ function adminItem(article, mode) {
 
 function renderReviewQueue() {
   const host = $("#reviewQueue");
-
   if (!host) return;
 
   const items = sortNewest(
@@ -1246,7 +2251,6 @@ function renderReviewQueue() {
 
 function renderPublishedManage() {
   const host = $("#publishedManage");
-
   if (!host) return;
 
   const items = sortNewest(
@@ -1304,15 +2308,13 @@ async function handleArticleAction(event) {
     }
   } catch (error) {
     console.error("Erro ao administrar matéria:", error);
-
-    showToast(
-      friendlyFirestoreError(error, "alterar a matéria"),
-      6000
-    );
+    showToast(friendlyFirestoreError(error, "alterar a matéria"), 6000);
   }
 }
 
-/* FIRESTORE: NOTÍCIAS PÚBLICAS E PAINEL ADMINISTRATIVO */
+/* =========================================================
+   FIRESTORE: MATÉRIAS
+   ========================================================= */
 
 function startPublicListener() {
   if (unsubscribePublic) unsubscribePublic();
@@ -1330,24 +2332,16 @@ function startPublicListener() {
         ...item.data()
       }));
 
-      if (isAdmin) {
-        allArticles = [
-          ...allArticles.filter(article => article.status !== "published"),
-          ...publicItems
-        ];
-
-        allArticles = [
-          ...new Map(allArticles.map(article => [article.id, article])).values()
-        ];
-      } else {
-        allArticles = publicItems;
-      }
+      allArticles = publicItems;
 
       renderHome();
 
-      if (isAdmin) {
-        renderReviewQueue();
-        renderPublishedManage();
+      if (currentArticleId) {
+        const updated = allArticles.find(item => item.id === currentArticleId);
+
+        if (!updated || updated.status !== "published") {
+          goHome();
+        }
       }
     },
     error => {
@@ -1368,10 +2362,7 @@ function startPublicListener() {
         $("#newsCount").textContent = "Erro ao carregar";
       }
 
-      showToast(
-        friendlyFirestoreError(error, "carregar as notícias"),
-        6000
-      );
+      showToast(friendlyFirestoreError(error, "carregar as notícias"), 6000);
     }
   );
 }
@@ -1393,16 +2384,14 @@ function startAdminListener() {
     },
     error => {
       console.error("Erro ao carregar painel editorial:", error);
-
-      showToast(
-        friendlyFirestoreError(error, "carregar o painel editorial"),
-        6000
-      );
+      showToast(friendlyFirestoreError(error, "carregar o painel editorial"), 6000);
     }
   );
 }
 
-/* BOTÃO LOGIN / PAINEL ADM */
+/* =========================================================
+   ESTADO DE AUTENTICAÇÃO
+   ========================================================= */
 
 function setAdminState(user) {
   currentUser = user;
@@ -1450,19 +2439,138 @@ function setAdminState(user) {
       unsubscribeAdmin = null;
     }
 
+    // Importante: contas comuns permanecem autenticadas
+    // para usar avaliações, comentários e curtidas.
     startPublicListener();
+  }
 
-    if (user) {
-      signOut(auth).catch(error => {
-        console.error("Erro ao encerrar sessão não autorizada:", error);
-      });
-    }
+  if (currentArticleId) {
+    renderRatingSection();
+    renderCommentsSection();
   }
 }
 
-/* EVENTOS */
+/* =========================================================
+   EVENTOS DA COMUNIDADE
+   ========================================================= */
+
+function setupCommunityEvents() {
+  document.addEventListener("click", async event => {
+    const ratingButton = event.target.closest("[data-rate]");
+
+    if (ratingButton) {
+      await setMyRating(ratingButton.dataset.rate);
+      return;
+    }
+
+    if (event.target.closest("[data-remove-rating]")) {
+      await removeMyRating();
+      return;
+    }
+
+    const likeButton = event.target.closest("[data-like-comment]");
+
+    if (likeButton) {
+      await toggleCommentLike(likeButton.dataset.likeComment);
+      return;
+    }
+
+    const replyButton = event.target.closest("[data-reply-comment]");
+
+    if (replyButton) {
+      if (!currentUser || !canUseCommunity()) {
+        openLogin();
+        showToast("Entre com Google ou Apple para responder.");
+        return;
+      }
+
+      replyToComment = replyButton.dataset.replyComment;
+      editingCommentId = null;
+      renderCommentsSection();
+
+      $("#articleComments textarea")?.focus();
+      return;
+    }
+
+    const editButton = event.target.closest("[data-edit-comment-button]");
+
+    if (editButton) {
+      editingCommentId = editButton.dataset.editCommentButton;
+      replyToComment = null;
+      renderCommentsSection();
+      return;
+    }
+
+    const deleteButton = event.target.closest("[data-delete-comment]");
+
+    if (deleteButton) {
+      await deleteComment(deleteButton.dataset.deleteComment);
+      return;
+    }
+
+    if (event.target.closest("[data-cancel-edit]")) {
+      editingCommentId = null;
+      renderCommentsSection();
+      return;
+    }
+
+    if (event.target.closest("[data-cancel-reply]")) {
+      replyToComment = null;
+      renderCommentsSection();
+      return;
+    }
+
+    const socialLogin = event.target.closest("[data-community-login]");
+
+    if (socialLogin) {
+      await signInWithCommunityProvider(socialLogin.dataset.communityLogin);
+      return;
+    }
+
+    if (event.target.closest("#communityLogoutBtn")) {
+      try {
+        await signOut(auth);
+        showToast("Sessão da comunidade encerrada.");
+      } catch (error) {
+        console.error("Erro ao sair da comunidade:", error);
+        showToast("Não foi possível encerrar a sessão.");
+      }
+    }
+  });
+
+  document.addEventListener("submit", async event => {
+    const newCommentForm = event.target.closest("#newCommentForm");
+
+    if (newCommentForm) {
+      event.preventDefault();
+
+      const text = new FormData(newCommentForm).get("commentText");
+      await createComment(text, replyToComment);
+
+      newCommentForm.reset();
+      return;
+    }
+
+    const editForm = event.target.closest("[data-edit-comment]");
+
+    if (editForm) {
+      event.preventDefault();
+
+      const commentId = editForm.dataset.editComment;
+      const text = new FormData(editForm).get("commentText");
+
+      await updateComment(commentId, text);
+    }
+  });
+}
+
+/* =========================================================
+   EVENTOS GERAIS
+   ========================================================= */
 
 function setupEvents() {
+  ensureCommunityLoginButtons();
+
   $("#adminBtn")?.addEventListener("click", () => {
     if (isAdmin && currentUser?.uid === ADMIN_UID) {
       $("#homeView")?.classList.toggle("hidden");
@@ -1476,9 +2584,7 @@ function setupEvents() {
   $("#closeLoginBtn")?.addEventListener("click", closeLogin);
 
   $("#loginOverlay")?.addEventListener("click", event => {
-    if (event.target === $("#loginOverlay")) {
-      closeLogin();
-    }
+    if (event.target === $("#loginOverlay")) closeLogin();
   });
 
   $("#loginForm")?.addEventListener("submit", async event => {
@@ -1495,18 +2601,18 @@ function setupEvents() {
     }
 
     try {
-      const result = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
+      const result = await signInWithEmailAndPassword(auth, email, password);
 
       if (result.user.uid !== ADMIN_UID) {
-        await signOut(auth);
-
         setLoginError(
-          "Esta conta não está autorizada como administradora deste portal."
+          "Esta conta não está autorizada como administradora deste portal. Use Google ou Apple para a comunidade."
         );
+
+        // Não encerra a sessão automaticamente:
+        // a conta pode ser usada na comunidade, se o provedor for permitido.
+        if (!canUseCommunity()) {
+          await signOut(auth);
+        }
       } else {
         closeLogin();
         showToast("Login realizado. Carregando painel editorial...");
@@ -1521,7 +2627,7 @@ function setupEvents() {
         "auth/wrong-password": "E-mail ou senha incorretos.",
         "auth/too-many-requests": "Muitas tentativas. Tente novamente mais tarde.",
         "auth/operation-not-allowed": "O login por e-mail/senha não está habilitado no Firebase Authentication.",
-        "auth/api-key-not-valid": "A chave de API foi recusada. Confira a configuração do projeto Firebase."
+        "auth/api-key-not-valid": "A chave de API foi recusada. Confira a configuração do Firebase."
       };
 
       setLoginError(
@@ -1606,7 +2712,6 @@ function setupEvents() {
       });
 
       shownCount = PAGE_SIZE;
-
       goHome();
       renderHome();
     });
@@ -1626,9 +2731,7 @@ function setupEvents() {
   });
 
   $("#clearSearch")?.addEventListener("click", () => {
-    if ($("#searchInput")) {
-      $("#searchInput").value = "";
-    }
+    if ($("#searchInput")) $("#searchInput").value = "";
 
     shownCount = PAGE_SIZE;
     renderHome();
@@ -1663,11 +2766,17 @@ function setupEvents() {
       goHome();
     }
   });
+
+  setupCommunityEvents();
 }
 
-/* INICIALIZAÇÃO */
+/* =========================================================
+   INICIALIZAÇÃO
+   ========================================================= */
 
 function initialize() {
+  installCommunityStyles();
+  ensureCommunityLoginButtons();
   setupEvents();
 
   onAuthStateChanged(
@@ -1677,7 +2786,7 @@ function initialize() {
       console.error("Erro no estado de autenticação:", error);
 
       showToast(
-        "Não foi possível verificar a sessão administrativa. Veja o Console.",
+        "Não foi possível verificar a sessão. Confira o Console do navegador.",
         6000
       );
     }
