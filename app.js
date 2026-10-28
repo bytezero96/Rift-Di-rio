@@ -23,20 +23,19 @@ import {
 
 /* =========================================
    CONFIGURAÇÃO FIREBASE
-   Mantenha aqui os seus dados reais.
 ========================================= */
 
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY",
-  authDomain: "SEU_PROJETO.firebaseapp.com",
-  projectId: "SEU_PROJECT_ID",
-  storageBucket: "SEU_PROJETO.firebasestorage.app",
-  messagingSenderId: "SEU_SENDER_ID",
-  appId: "SEU_APP_ID"
+  apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
+  authDomain: "duelosrankeadoswr.firebaseapp.com",
+  projectId: "duelosrankeadoswr",
+  storageBucket: "duelosrankeadoswr.firebasestorage.app",
+  messagingSenderId: "453903935694",
+  appId: "1:453903935694:web:d0334556ca801b84acc89f",
+  measurementId: "G-6ZZ14JXLYB"
 };
 
-// Coloque o UID real da sua conta administradora.
-const ADMIN_UID = "SEU_UID_ADMIN";
+const ADMIN_UID = "U7ohORMjr1O9Ubby2WFMztAe8Au2";
 
 /* =========================================
    INICIALIZAÇÃO
@@ -74,6 +73,7 @@ function showMessage(message, type = "error") {
     messageBox = document.createElement("div");
     messageBox.id = "appMessage";
     messageBox.setAttribute("role", "status");
+    messageBox.setAttribute("aria-live", "polite");
 
     Object.assign(messageBox.style, {
       position: "fixed",
@@ -100,6 +100,7 @@ function showMessage(message, type = "error") {
   messageBox.classList.remove("hidden");
 
   clearTimeout(messageBox.hideTimer);
+
   messageBox.hideTimer = setTimeout(() => {
     messageBox.classList.add("hidden");
   }, 4000);
@@ -110,24 +111,25 @@ function showMessage(message, type = "error") {
 ========================================= */
 
 function openLogin() {
-  if (loginOverlay) {
-    loginOverlay.classList.remove("hidden");
-    loginOverlay.setAttribute("aria-hidden", "false");
-
-    if (loginTitle) {
-      loginTitle.textContent = "Login";
-    }
-
-    const emailInput = loginForm?.querySelector(
-      'input[type="email"], input[name="email"]'
-    );
-
-    emailInput?.focus();
-  } else {
+  if (!loginOverlay) {
     showMessage(
       "Não encontrei #loginOverlay. Confira o ID no HTML."
     );
+    return;
   }
+
+  loginOverlay.classList.remove("hidden");
+  loginOverlay.setAttribute("aria-hidden", "false");
+
+  if (loginTitle) {
+    loginTitle.textContent = "Login";
+  }
+
+  const emailInput = loginForm?.querySelector(
+    'input[type="email"], input[name="email"]'
+  );
+
+  emailInput?.focus();
 }
 
 function closeLogin() {
@@ -144,27 +146,25 @@ adminBtn?.addEventListener("click", () => {
     } else {
       showMessage("Não encontrei #adminPanel no HTML.");
     }
+
     return;
   }
 
   openLogin();
 });
 
-// Compatibilidade com diferentes nomes de botão de fechar.
 $$(
   "#closeLogin, #closeLoginBtn, #loginCloseBtn, [data-close-login]"
 ).forEach((button) => {
   button.addEventListener("click", closeLogin);
 });
 
-// Fecha ao clicar no fundo do modal.
 loginOverlay?.addEventListener("click", (event) => {
   if (event.target === loginOverlay) {
     closeLogin();
   }
 });
 
-// Fecha com a tecla Escape.
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeLogin();
@@ -203,7 +203,21 @@ loginForm?.addEventListener("submit", async (event) => {
   }
 
   try {
-    await signInWithEmailAndPassword(auth, email, password);
+    const credential = await signInWithEmailAndPassword(
+      auth,
+      email,
+      password
+    );
+
+    if (credential.user.uid !== ADMIN_UID) {
+      await signOut(auth);
+
+      showMessage(
+        "Esta conta não tem permissão de administrador."
+      );
+
+      return;
+    }
 
     closeLogin();
     loginForm.reset();
@@ -213,17 +227,25 @@ loginForm?.addEventListener("submit", async (event) => {
     console.error("Erro no login:", error);
 
     const messages = {
-      "auth/invalid-credential": "E-mail ou senha incorretos.",
-      "auth/invalid-email": "O e-mail informado é inválido.",
-      "auth/user-not-found": "Usuário não encontrado.",
-      "auth/wrong-password": "Senha incorreta.",
+      "auth/invalid-credential":
+        "E-mail ou senha incorretos.",
+      "auth/invalid-email":
+        "O e-mail informado é inválido.",
+      "auth/user-not-found":
+        "Usuário não encontrado.",
+      "auth/wrong-password":
+        "Senha incorreta.",
       "auth/too-many-requests":
-        "Muitas tentativas. Aguarde e tente novamente."
+        "Muitas tentativas. Aguarde e tente novamente.",
+      "auth/operation-not-allowed":
+        "O login por e-mail e senha não está habilitado no Firebase.",
+      "auth/network-request-failed":
+        "Falha de conexão. Verifique sua internet."
     };
 
     showMessage(
       messages[error.code] ||
-      "Não foi possível entrar. Confira sua conexão e os dados."
+      "Não foi possível entrar. Confira a configuração do Firebase."
     );
   } finally {
     if (submitButton) {
@@ -241,32 +263,43 @@ function setAdminState(user) {
   isAdmin = Boolean(user && user.uid === ADMIN_UID);
 
   if (adminBtn) {
-    // O botão permanece com o texto Login.
     adminBtn.textContent = "Login";
+
     adminBtn.setAttribute(
       "aria-label",
-      isAdmin ? "Abrir painel administrativo" : "Fazer login"
+      isAdmin
+        ? "Abrir painel administrativo"
+        : "Fazer login"
     );
   }
 
   logoutBtn?.classList.toggle("hidden", !isAdmin);
 
-  if (adminPanel && !isAdmin) {
-    adminPanel.classList.add("hidden");
+  if (adminPanel) {
+    adminPanel.classList.toggle("hidden", !isAdmin);
   }
 
-  // Se houver uma área exclusiva do administrador no HTML.
   $$("[data-admin-only]").forEach((element) => {
     element.classList.toggle("hidden", !isAdmin);
   });
-
-  // Exibe o painel apenas para o administrador autenticado.
-  if (isAdmin && adminPanel) {
-    adminPanel.classList.remove("hidden");
-  }
 }
 
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
+  if (user && user.uid !== ADMIN_UID) {
+    setAdminState(null);
+
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error(
+        "Erro ao encerrar sessão não autorizada:",
+        error
+      );
+    }
+
+    return;
+  }
+
   setAdminState(user);
 });
 
@@ -274,10 +307,6 @@ logoutBtn?.addEventListener("click", async () => {
   try {
     await signOut(auth);
     closeLogin();
-
-    if (adminPanel) {
-      adminPanel.classList.add("hidden");
-    }
 
     showMessage("Você saiu da sua conta.", "success");
   } catch (error) {
@@ -299,22 +328,20 @@ function normalizePath(value) {
 }
 
 function activateNavigation(clickedLink) {
-  // Retira a seleção de todas as opções.
-  $$(".nav-link, .nav-link.active, [data-nav-link]").forEach(
-    (link) => {
-      link.classList.remove("active");
-      link.removeAttribute("aria-current");
-    }
-  );
+  $$(".nav-link, [data-nav-link]").forEach((link) => {
+    link.classList.remove("active");
+    link.removeAttribute("aria-current");
+  });
 
-  // Seleciona somente a opção clicada.
   clickedLink.classList.add("active");
   clickedLink.setAttribute("aria-current", "page");
 }
 
 function navigateToSection(link) {
   const href = link.getAttribute("href") || "";
-  const targetId = link.dataset.target ||
+
+  const targetId =
+    link.dataset.target ||
     (href.startsWith("#") ? href.slice(1) : "");
 
   if (!targetId) return;
@@ -323,7 +350,6 @@ function navigateToSection(link) {
 
   if (!target) return;
 
-  // Esconde as seções de conteúdo que usam data-page.
   const pages = $$("[data-page]");
 
   if (pages.length) {
@@ -333,7 +359,6 @@ function navigateToSection(link) {
 
     target.classList.remove("hidden");
   } else {
-    // Se o site não usa data-page, apenas rola até a seção.
     target.scrollIntoView({
       behavior: "smooth",
       block: "start"
@@ -341,17 +366,16 @@ function navigateToSection(link) {
   }
 }
 
-const navigationLinks = $$(
-  ".nav-link, [data-nav-link]"
-);
+const navigationLinks = $$(".nav-link, [data-nav-link]");
 
 navigationLinks.forEach((link) => {
   link.addEventListener("click", (event) => {
     const href = link.getAttribute("href") || "";
-    const targetId = link.dataset.target ||
+
+    const targetId =
+      link.dataset.target ||
       (href.startsWith("#") ? href.slice(1) : "");
 
-    // Links com destino interno são tratados pelo site.
     if (targetId) {
       const target = document.getElementById(targetId);
 
@@ -365,7 +389,6 @@ navigationLinks.forEach((link) => {
   });
 });
 
-// Se o HTML usa botões ou abas com data-target.
 $$("[data-target]").forEach((element) => {
   if (
     element.matches(".nav-link, [data-nav-link]") ||
@@ -392,7 +415,9 @@ function initializeNavigation() {
   if (currentHash) {
     initialLink = Array.from(navigationLinks).find((link) => {
       const href = link.getAttribute("href") || "";
-      const target = link.dataset.target ||
+
+      const target =
+        link.dataset.target ||
         (href.startsWith("#") ? href.slice(1) : "");
 
       return target === currentHash.slice(1);
@@ -422,12 +447,14 @@ function initializeNavigation() {
 initializeNavigation();
 
 /* =========================================
-   FIRESTORE
-   Referência disponível para as funções
-   de notícias que você já utiliza no site.
+   FIRESTORE — NOTÍCIAS
 ========================================= */
 
 const articlesCollection = collection(db, "articles");
+
+/* =========================================
+   EXPORTAÇÕES
+========================================= */
 
 export {
   app,
