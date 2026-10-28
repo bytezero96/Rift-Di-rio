@@ -14,6 +14,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="style.css">
+
+  <!-- Sanitização do conteúdo do editor -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script type="module" src="app.js"></script>
 
   <style>
@@ -32,6 +35,118 @@
 
     .brand-icon::after {
       content: none;
+    }
+
+    /* Editor de matérias */
+    .rich-editor {
+      width: 100%;
+      min-height: 300px;
+      padding: 18px;
+      color: var(--text);
+      background: #0b1321;
+      border: 1px solid var(--border);
+      border-radius: 0 0 10px 10px;
+      outline: none;
+      line-height: 1.8;
+      overflow-wrap: anywhere;
+    }
+
+    .rich-editor:focus {
+      border-color: var(--gold-border, #b38b38);
+    }
+
+    .rich-editor:empty::before {
+      content: attr(data-placeholder);
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .rich-editor img,
+    .rich-editor video {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 18px auto;
+      border-radius: 8px;
+    }
+
+    .rich-editor video {
+      width: min(100%, 720px);
+      background: #000;
+    }
+
+    .rich-editor iframe {
+      display: block;
+      width: 100%;
+      min-height: 350px;
+      margin: 18px auto;
+      border: 0;
+      border-radius: 8px;
+    }
+
+    .rich-editor blockquote {
+      margin: 18px 0;
+      padding: 12px 18px;
+      border-left: 3px solid var(--gold, #d5a83b);
+      background: #ffffff08;
+    }
+
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 10px;
+      background: #111b2b;
+      border: 1px solid var(--border);
+      border-bottom: 0;
+      border-radius: 10px 10px 0 0;
+    }
+
+    .editor-toolbar button,
+    .editor-toolbar select {
+      min-height: 35px;
+      padding: 7px 10px;
+      color: var(--text);
+      background: #172337;
+      border: 1px solid #304158;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+    }
+
+    .editor-toolbar button:hover,
+    .editor-toolbar select:hover {
+      border-color: var(--gold-border, #b38b38);
+    }
+
+    .editor-toolbar input[type="color"] {
+      width: 38px;
+      height: 35px;
+      padding: 3px;
+      background: #172337;
+      border: 1px solid #304158;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .editor-toolbar .toolbar-separator {
+      width: 1px;
+      height: 25px;
+      margin: 0 2px;
+      background: #304158;
+    }
+
+    .editor-upload-input {
+      display: none;
+    }
+
+    .editor-hint {
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
     }
 
     /* Rodapé */
@@ -149,6 +264,73 @@
       transform: translateY(-1px);
     }
 
+    /* Login compacto */
+    .login-modal {
+      position: relative;
+      width: min(410px, calc(100% - 32px));
+      padding: 28px;
+    }
+
+    .login-brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .login-logo {
+      width: 38px;
+      height: 38px;
+      object-fit: contain;
+    }
+
+    .login-brand-name {
+      font-size: 21px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+
+    .login-brand-caption,
+    .login-divider,
+    .login-kicker,
+    #loginDescription,
+    .login-field-hint,
+    .login-footer {
+      display: none;
+    }
+
+    .login-heading {
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .login-heading h2 {
+      margin: 0;
+      font-size: 24px;
+    }
+
+    .login-form {
+      display: grid;
+      gap: 15px;
+    }
+
+    .login-field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .login-submit {
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    .login-error {
+      margin: 0;
+      color: #ff7777;
+      font-size: 13px;
+    }
+
     @media (max-width: 700px) {
       .site-footer {
         justify-content: center;
@@ -166,6 +348,15 @@
       .footer-socials {
         margin-left: 0;
       }
+
+      .editor-toolbar {
+        gap: 5px;
+      }
+
+      .editor-toolbar button,
+      .editor-toolbar select {
+        padding: 7px;
+      }
     }
 
     @media (max-width: 480px) {
@@ -176,6 +367,15 @@
 
       .footer-social-link {
         padding: 7px 9px;
+      }
+
+      .login-modal {
+        padding: 24px 20px;
+      }
+
+      .rich-editor {
+        min-height: 240px;
+        padding: 13px;
       }
     }
   </style>
@@ -279,10 +479,10 @@
     <section id="adminPanel" class="admin-panel hidden">
       <div class="section-heading">
         <div>
-          <span class="eyebrow">ÁREA RESTRITA</span>
-          <h2>Login</h2>
+          <span class="eyebrow">ÁREA ADMINISTRATIVA</span>
+          <h2>Painel de matérias</h2>
           <p class="muted">
-            Gerencie matérias próprias e revise conteúdo importado.
+            Crie, revise e gerencie as publicações do Rift Diário.
           </p>
         </div>
 
@@ -326,7 +526,7 @@
                 rows="3"
                 maxlength="300"
                 required
-                placeholder="Resumo curto para os cards e para os mecanismos de busca"
+                placeholder="Resumo curto para os cards e mecanismos de busca"
               ></textarea>
             </div>
 
@@ -351,7 +551,7 @@
             </div>
 
             <div class="field full">
-              <label for="articleImage">URL da imagem (opcional)</label>
+              <label for="articleImage">URL da imagem de capa (opcional)</label>
               <input
                 id="articleImage"
                 type="url"
@@ -360,13 +560,66 @@
             </div>
 
             <div class="field full">
-              <label for="articleContent">Matéria *</label>
-              <textarea
+              <label>Conteúdo da matéria *</label>
+
+              <div class="editor-toolbar" role="toolbar" aria-label="Formatação da matéria">
+                <button type="button" data-command="bold" title="Negrito"><strong>B</strong></button>
+                <button type="button" data-command="italic" title="Itálico"><em>I</em></button>
+                <button type="button" data-command="underline" title="Sublinhado"><u>U</u></button>
+                <button type="button" data-command="strikeThrough" title="Tachado"><s>S</s></button>
+
+                <span class="toolbar-separator"></span>
+
+                <select id="editorBlockFormat" aria-label="Formato do texto">
+                  <option value="p">Parágrafo</option>
+                  <option value="h2">Título grande</option>
+                  <option value="h3">Subtítulo</option>
+                  <option value="blockquote">Citação</option>
+                </select>
+
+                <label for="editorTextColor" title="Cor do texto">Cor</label>
+                <input id="editorTextColor" type="color" value="#f2f5f9" aria-label="Escolher cor do texto">
+
+                <span class="toolbar-separator"></span>
+
+                <button type="button" data-command="insertUnorderedList" title="Lista com marcadores">• Lista</button>
+                <button type="button" data-command="insertOrderedList" title="Lista numerada">1. Lista</button>
+                <button type="button" id="editorLinkBtn" title="Inserir link">Link</button>
+
+                <span class="toolbar-separator"></span>
+
+                <button type="button" id="insertImageBtn" title="Inserir imagem no cursor">＋ Imagem</button>
+                <button type="button" id="insertVideoBtn" title="Inserir vídeo no cursor">＋ Vídeo</button>
+
+                <input
+                  id="editorImageInput"
+                  class="editor-upload-input"
+                  type="file"
+                  accept="image/*"
+                >
+
+                <input
+                  id="editorVideoInput"
+                  class="editor-upload-input"
+                  type="file"
+                  accept="video/mp4,video/webm,video/ogg"
+                >
+              </div>
+
+              <div
                 id="articleContent"
-                rows="10"
-                required
-                placeholder="Escreva o conteúdo da matéria. Separe parágrafos com linhas em branco."
-              ></textarea>
+                class="rich-editor"
+                contenteditable="true"
+                role="textbox"
+                aria-multiline="true"
+                aria-label="Conteúdo da matéria"
+                data-placeholder="Escreva sua matéria aqui. Use a barra acima para formatar o texto e inserir imagens e vídeos..."
+              ></div>
+
+              <p class="editor-hint">
+                Clique no ponto em que deseja inserir uma imagem ou vídeo antes de selecionar o arquivo.
+                A mídia será inserida nessa posição do texto.
+              </p>
             </div>
           </div>
 
@@ -398,7 +651,7 @@
 
           <p class="form-hint">
             Matérias próprias são identificadas como conteúdo da redação.
-            Confira os direitos de uso das imagens antes de publicar.
+            Confira os direitos de uso das imagens e vídeos antes de publicar.
           </p>
         </form>
       </div>
@@ -490,14 +743,13 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Login profissional -->
+  <!-- Login compacto -->
   <div id="loginOverlay" class="login-overlay hidden">
     <div
       class="login-modal"
       role="dialog"
       aria-modal="true"
       aria-labelledby="loginTitle"
-      aria-describedby="loginDescription"
     >
       <button
         id="closeLoginBtn"
@@ -517,33 +769,28 @@
           RIFT <strong>DIÁRIO</strong>
         </div>
 
-        <span class="login-brand-caption">
-          CENTRAL DE ADMINISTRAÇÃO
-        </span>
+        <span class="login-brand-caption">CENTRAL DE ADMINISTRAÇÃO</span>
       </div>
 
       <div class="login-divider"></div>
 
       <div class="login-heading">
         <span class="login-kicker">ACESSO RESTRITO</span>
-
-        <h2 id="loginTitle">Bem-vindo de volta</h2>
-
+        <h2 id="loginTitle">Entrar no painel</h2>
         <p id="loginDescription">
-          Entre com sua conta autorizada para acessar o painel
-          administrativo do Rift Diário.
+          Entre com sua conta administrativa.
         </p>
       </div>
 
       <form id="loginForm" class="login-form">
         <div class="login-field">
-          <label for="adminEmail">E-mail de acesso</label>
+          <label for="adminEmail">E-mail</label>
 
           <input
             id="adminEmail"
             name="email"
             type="email"
-            placeholder="seuemail@exemplo.com"
+            placeholder="Seu e-mail"
             autocomplete="username"
             autocapitalize="none"
             spellcheck="false"
@@ -562,7 +809,7 @@
             id="adminPassword"
             name="password"
             type="password"
-            placeholder="Digite sua senha"
+            placeholder="Sua senha"
             autocomplete="current-password"
             required
           >
@@ -577,7 +824,7 @@
           id="loginSubmitBtn"
           type="submit"
         >
-          Entrar no painel
+          Entrar
         </button>
 
         <p
