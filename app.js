@@ -1,3 +1,4 @@
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
 import {
   getAuth,
@@ -20,14 +21,11 @@ import {
 import {
   getStorage,
   ref as storageRef,
-  uploadBytes,
+  uploadBytesResumable,
   getDownloadURL
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
-/* =========================================================
-   RIFT DIÁRIO — CONFIGURAÇÃO ORIGINAL DO FIREBASE
-========================================================= */
-
+/* Rift Diário — configuração original preservada */
 const firebaseConfig = {
   apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
   authDomain: "duelosrankeadoswr.firebaseapp.com",
@@ -61,23 +59,20 @@ let uploadInProgress = false;
 let unsubscribePublic = null;
 let unsubscribeAdmin = null;
 let toastTimer = null;
-let publicListenerStarted = false;
 
 const PAGE_SIZE = 9;
 let shownCount = PAGE_SIZE;
 
-/* =========================================================
-   FUNÇÕES AUXILIARES
-========================================================= */
+/* UTILITÁRIOS */
 
 function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, character => ({
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#039;"
-  })[character]);
+  })[char]);
 }
 
 function showToast(message, duration = 3500) {
@@ -100,10 +95,7 @@ function showToast(message, duration = 3500) {
 
 function setLoginError(message = "") {
   const element = $("#loginError");
-
-  if (element) {
-    element.textContent = message;
-  }
+  if (element) element.textContent = message;
 }
 
 function formatDate(value) {
@@ -145,24 +137,18 @@ function categoryLabel(category) {
 }
 
 function articleDate(article) {
-  return article.publishedAt ||
-    article.updatedAt ||
-    article.createdAt ||
-    null;
+  return article.publishedAt || article.updatedAt || article.createdAt || null;
 }
 
 function sortNewest(list) {
   return [...list].sort((a, b) => {
-    const valueA = articleDate(a);
-    const valueB = articleDate(b);
+    const dateA = articleDate(a)?.toDate
+      ? articleDate(a).toDate().getTime()
+      : new Date(articleDate(a) || 0).getTime();
 
-    const dateA = valueA?.toDate
-      ? valueA.toDate().getTime()
-      : new Date(valueA || 0).getTime();
-
-    const dateB = valueB?.toDate
-      ? valueB.toDate().getTime()
-      : new Date(valueB || 0).getTime();
+    const dateB = articleDate(b)?.toDate
+      ? articleDate(b).toDate().getTime()
+      : new Date(articleDate(b) || 0).getTime();
 
     return dateB - dateA;
   });
@@ -176,36 +162,33 @@ function normalized(value) {
     .trim();
 }
 
-/* =========================================================
-   CORREÇÃO: SANITIZAÇÃO E RENDERIZAÇÃO DO HTML DAS MATÉRIAS
-========================================================= */
+/* SANITIZAÇÃO DE HTML */
 
 function sanitizeArticleHTML(html) {
-  const parsed = new DOMParser().parseFromString(
-    String(html ?? ""),
-    "text/html"
-  );
+  const parser = new DOMParser();
+  const parsed = parser.parseFromString(String(html ?? ""), "text/html");
 
   const allowedTags = new Set([
     "P", "BR", "STRONG", "B", "EM", "I", "U", "S",
     "H2", "H3", "H4", "UL", "OL", "LI", "BLOCKQUOTE",
-    "A", "IMG", "FIGURE", "FIGCAPTION",
-    "TABLE", "THEAD", "TBODY", "TR", "TH", "TD",
-    "HR", "CODE", "PRE"
+    "A", "IMG", "FIGURE", "FIGCAPTION", "TABLE",
+    "THEAD", "TBODY", "TR", "TH", "TD", "HR", "CODE",
+    "PRE", "DIV", "SPAN", "SECTION", "SMALL", "SUB",
+    "SUP", "MARK"
   ]);
 
-  const allowedAttributes = new Set([
+  const allowedAttrs = new Set([
     "href", "src", "alt", "title", "target", "rel",
     "width", "height", "loading"
   ]);
 
-  function safeUrl(value, isImage = false) {
+  function safeUrl(value, image = false) {
     const raw = String(value || "").trim();
 
     if (!raw) return "";
 
     if (
-      isImage &&
+      image &&
       /^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)
     ) {
       return raw;
@@ -214,79 +197,59 @@ function sanitizeArticleHTML(html) {
     try {
       const url = new URL(raw, window.location.href);
 
-      if (url.protocol === "https:" || url.protocol === "http:") {
-        return url.href;
-      }
+      return ["https:", "http:"].includes(url.protocol)
+        ? url.href
+        : "";
     } catch {
-      // URL inválida.
+      return "";
     }
-
-    return "";
   }
 
-  function cleanNode(parent) {
+  function clean(parent) {
     for (const node of [...parent.childNodes]) {
       if (node.nodeType === Node.COMMENT_NODE) {
         node.remove();
         continue;
       }
 
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        continue;
-      }
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
 
       const tag = node.tagName;
 
       if ([
         "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED",
-        "FORM", "INPUT", "BUTTON", "SVG", "MATH"
+        "FORM", "INPUT", "BUTTON", "SVG", "MATH",
+        "LINK", "META", "BASE"
       ].includes(tag)) {
         node.remove();
         continue;
       }
 
       if (!allowedTags.has(tag)) {
-        cleanNode(node);
+        clean(node);
         node.replaceWith(...node.childNodes);
         continue;
       }
 
-      for (const attribute of [...node.attributes]) {
-        const name = attribute.name.toLowerCase();
+      for (const attr of [...node.attributes]) {
+        const name = attr.name.toLowerCase();
 
-        if (!allowedAttributes.has(name)) {
-          node.removeAttribute(attribute.name);
-          continue;
-        }
+        if (!allowedAttrs.has(name)) {
+          node.removeAttribute(attr.name);
+        } else if (name === "href") {
+          const url = safeUrl(attr.value);
 
-        if (name === "href") {
-          const url = safeUrl(attribute.value);
+          if (url) node.setAttribute("href", url);
+          else node.removeAttribute("href");
+        } else if (name === "src") {
+          const url = safeUrl(attr.value, true);
 
-          if (url) {
-            node.setAttribute("href", url);
-          } else {
-            node.removeAttribute("href");
-          }
-        }
-
-        if (name === "src") {
-          const url = safeUrl(
-            attribute.value,
-            tag === "IMG"
-          );
-
-          if (url) {
-            node.setAttribute("src", url);
-          } else {
-            node.removeAttribute("src");
-          }
+          if (url) node.setAttribute("src", url);
+          else node.removeAttribute("src");
         }
       }
 
-      if (
-        tag === "A" &&
-        node.getAttribute("target") === "_blank"
-      ) {
+      if (tag === "A" && node.getAttribute("target") === "_blank") {
         node.setAttribute("rel", "noopener noreferrer");
       }
 
@@ -294,12 +257,11 @@ function sanitizeArticleHTML(html) {
         node.setAttribute("loading", "lazy");
       }
 
-      cleanNode(node);
+      clean(node);
     }
   }
 
-  cleanNode(parsed.body);
-
+  clean(parsed.body);
   return parsed.body.innerHTML;
 }
 
@@ -308,16 +270,14 @@ function renderContentSegment(value) {
 
   if (!text) return "";
 
-  const containsHTML =
-    /<(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code)\b[^>]*>/i
+  const hasHTML =
+    /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code|div|span|section|small|sub|sup|mark)\b[^>]*>/i
       .test(text);
 
-  // Conteúdo antigo salvo em HTML: renderiza as tags permitidas.
-  if (containsHTML) {
+  if (hasHTML) {
     return sanitizeArticleHTML(text);
   }
 
-  // Texto simples: transforma parágrafos e quebras de linha em HTML.
   return text
     .split(/\n\s*\n/)
     .map(paragraph => {
@@ -330,9 +290,7 @@ function renderContentSegment(value) {
     .join("");
 }
 
-/* =========================================================
-   CARTÕES E PÁGINA INICIAL
-========================================================= */
+/* CARTÕES E PÁGINA INICIAL */
 
 function articleCard(article) {
   const image = article.image
@@ -342,27 +300,19 @@ function articleCard(article) {
   return `
     <article class="news-card">
       ${image}
-
       <div class="news-card-copy">
         <span class="tag">
-          ${escapeHTML(categoryLabel(article.category))}
-          · ${escapeHTML(gameLabel(article.game))}
+          ${escapeHTML(categoryLabel(article.category))} ·
+          ${escapeHTML(gameLabel(article.game))}
         </span>
-
-        <div class="meta">
-          ${escapeHTML(formatDate(articleDate(article)))}
-        </div>
-
+        <div class="meta">${escapeHTML(formatDate(articleDate(article)))}</div>
         <h3>${escapeHTML(article.title)}</h3>
         <p>${escapeHTML(article.summary)}</p>
-
         <a
           class="read-link"
           href="#artigo/${encodeURIComponent(article.id)}"
           data-open-article="${escapeHTML(article.id)}"
-        >
-          Ler matéria ↗
-        </a>
+        >Ler matéria</a>
       </div>
     </article>
   `;
@@ -373,7 +323,7 @@ function renderHome() {
     allArticles.filter(article => article.status === "published")
   );
 
-  const searchTerm = normalized($("#searchInput")?.value || "");
+  const search = normalized($("#searchInput")?.value || "");
 
   visibleArticles = published.filter(article => {
     const matchesCategory =
@@ -381,12 +331,11 @@ function renderHome() {
       article.game === activeCategory ||
       article.category === activeCategory;
 
-    const searchableText = normalized(
+    const haystack = normalized(
       `${article.title} ${article.summary} ${article.content} ${article.videoUrl || ""} ${article.game} ${article.category}`
     );
 
-    return matchesCategory &&
-      (!searchTerm || searchableText.includes(searchTerm));
+    return matchesCategory && (!search || haystack.includes(search));
   });
 
   const featured = $("#featuredSection");
@@ -402,27 +351,19 @@ function renderHome() {
               ? `<img class="featured-image" src="${escapeHTML(item.image)}" alt="${escapeHTML(item.title)}">`
               : `<div class="featured-image" aria-hidden="true"></div>`
           }
-
           <div class="featured-copy">
-            <span class="tag">
-              DESTAQUE · ${escapeHTML(categoryLabel(item.category))}
-            </span>
-
+            <span class="tag">DESTAQUE · ${escapeHTML(categoryLabel(item.category))}</span>
             <div class="meta">
-              ${escapeHTML(gameLabel(item.game))}
-              · ${escapeHTML(formatDate(articleDate(item)))}
+              ${escapeHTML(gameLabel(item.game))} ·
+              ${escapeHTML(formatDate(articleDate(item)))}
             </div>
-
             <h2>${escapeHTML(item.title)}</h2>
             <p>${escapeHTML(item.summary)}</p>
-
             <a
               class="read-link"
               href="#artigo/${encodeURIComponent(item.id)}"
               data-open-article="${escapeHTML(item.id)}"
-            >
-              Ler notícia completa ↗
-            </a>
+            >Ler notícia completa</a>
           </div>
         </article>
       `
@@ -435,12 +376,11 @@ function renderHome() {
   const loadMore = $("#loadMoreBtn");
 
   if (count) {
-    count.textContent =
-      `${visibleArticles.length} notícia${visibleArticles.length === 1 ? "" : "s"}`;
+    count.textContent = `${visibleArticles.length} notícia${visibleArticles.length === 1 ? "" : "s"}`;
   }
 
   if (title) {
-    title.textContent = searchTerm
+    title.textContent = search
       ? "Resultados da busca"
       : activeCategory === "all"
         ? "Últimas notícias"
@@ -448,35 +388,21 @@ function renderHome() {
   }
 
   if (grid) {
-    if (!visibleArticles.length) {
-      grid.innerHTML = `
-        <div class="empty-state">
-          ${
-            searchTerm
-              ? "Nenhuma notícia corresponde à busca."
-              : "Ainda não há notícias publicadas nesta categoria."
-          }
-        </div>
-      `;
-    } else {
-      grid.innerHTML = visibleArticles
-        .slice(0, shownCount)
-        .map(articleCard)
-        .join("");
-    }
+    grid.innerHTML = !visibleArticles.length
+      ? `<div class="empty-state">${
+          search
+            ? "Nenhuma notícia corresponde à busca."
+            : "Ainda não há notícias publicadas nesta categoria."
+        }</div>`
+      : visibleArticles.slice(0, shownCount).map(articleCard).join("");
   }
 
   if (loadMore) {
-    loadMore.classList.toggle(
-      "hidden",
-      visibleArticles.length <= shownCount
-    );
+    loadMore.classList.toggle("hidden", visibleArticles.length <= shownCount);
   }
 }
 
-/* =========================================================
-   VÍDEOS — LINKS E INCORPORAÇÃO
-========================================================= */
+/* PLAYERS DE VÍDEO */
 
 function buildVideoEmbed(rawUrl) {
   const value = String(rawUrl || "").trim();
@@ -491,16 +417,15 @@ function buildVideoEmbed(rawUrl) {
     return "";
   }
 
-  if (!["https:", "http:"].includes(url.protocol)) {
-    return "";
-  }
+  if (!["https:", "http:"].includes(url.protocol)) return "";
 
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   const pathParts = url.pathname.split("/").filter(Boolean);
+
   let src = "";
   const parent = location.hostname || "localhost";
 
-  // YouTube
+  // YouTube: links comuns, Shorts, lives e links de incorporação.
   if ([
     "youtube.com",
     "m.youtube.com",
@@ -509,43 +434,34 @@ function buildVideoEmbed(rawUrl) {
   ].includes(host)) {
     let id = url.searchParams.get("v");
 
-    if (
-      !id &&
-      ["shorts", "live", "embed", "v"].includes(pathParts[0])
-    ) {
+    if (!id && ["shorts", "live", "embed", "v"].includes(pathParts[0])) {
       id = pathParts[1];
     }
 
-    if (!id || !/^[\w-]{11}$/.test(id)) {
-      return "";
-    }
+    if (!id || !/^[\w-]{11}$/.test(id)) return "";
 
     src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
   } else if (host === "youtu.be") {
     const id = pathParts[0];
 
-    if (!id || !/^[\w-]{11}$/.test(id)) {
-      return "";
-    }
+    if (!id || !/^[\w-]{11}$/.test(id)) return "";
 
     src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
   }
 
-  // Vimeo
+  // Vimeo.
   else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
     const id =
       host === "player.vimeo.com" && pathParts[0] === "video"
         ? pathParts[1]
         : pathParts[pathParts.length - 1];
 
-    if (!id || !/^\d+$/.test(id)) {
-      return "";
-    }
+    if (!id || !/^\d+$/.test(id)) return "";
 
     src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
   }
 
-  // Dailymotion
+  // Dailymotion.
   else if (["dailymotion.com", "dai.ly"].includes(host)) {
     let id = "";
 
@@ -553,21 +469,16 @@ function buildVideoEmbed(rawUrl) {
       id = pathParts[0] || "";
     } else if (pathParts[0] === "video") {
       id = (pathParts[1] || "").split("_")[0];
-    } else if (
-      pathParts[0] === "embed" &&
-      pathParts[1] === "video"
-    ) {
+    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
       id = pathParts[2] || "";
     }
 
-    if (!id || !/^[A-Za-z0-9]+$/.test(id)) {
-      return "";
-    }
+    if (!id || !/^[A-Za-z0-9]+$/.test(id)) return "";
 
     src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
   }
 
-  // Twitch
+  // Twitch.
   else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
     if (host === "clips.twitch.tv") {
       const slug = pathParts[0];
@@ -575,19 +486,13 @@ function buildVideoEmbed(rawUrl) {
       if (!slug) return "";
 
       src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(parent)}`;
-    } else if (
-      pathParts[0] === "videos" &&
-      /^\d+$/.test(pathParts[1] || "")
-    ) {
+    } else if (pathParts[0] === "videos" && /^\d+$/.test(pathParts[1] || "")) {
       src = `https://player.twitch.tv/?video=v${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
     } else if (pathParts[0] === "clip" && pathParts[1]) {
       src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
     } else if (
       pathParts[0] &&
-      ![
-        "directory", "downloads", "jobs", "p",
-        "search", "settings", "turbo"
-      ].includes(pathParts[0].toLowerCase())
+      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"].includes(pathParts[0].toLowerCase())
     ) {
       src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
     } else {
@@ -595,22 +500,19 @@ function buildVideoEmbed(rawUrl) {
     }
   }
 
-  // Kick
+  // Kick.
   else if (["kick.com", "player.kick.com"].includes(host)) {
     const channel = pathParts[0];
 
-    if (
-      !channel ||
-      ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())
-    ) {
+    if (!channel || ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())) {
       return "";
     }
 
     src = `https://player.kick.com/${encodeURIComponent(channel)}`;
   }
 
-  // Arquivos de vídeo diretos
-  else if (/\.(mp4|webm|ogv|ogg|mov)$/i.test(url.pathname)) {
+  // Vídeo hospedado diretamente em um endereço MP4, WebM ou OGG.
+  else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
     return `
       <div class="article-video">
         <video controls playsinline preload="metadata">
@@ -637,15 +539,9 @@ function buildVideoEmbed(rawUrl) {
   `;
 }
 
-/* =========================================================
-   CORPO DA MATÉRIA E MÍDIAS INSERIDAS
-========================================================= */
-
 function renderArticleBody(content, media = []) {
   const byId = new Map(
-    (Array.isArray(media) ? media : [])
-      .filter(item => item && item.id)
-      .map(item => [item.id, item])
+    (Array.isArray(media) ? media : []).map(item => [item.id, item])
   );
 
   const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
@@ -656,9 +552,7 @@ function renderArticleBody(content, media = []) {
   let match;
 
   while ((match = markerPattern.exec(source)) !== null) {
-    html += renderContentSegment(
-      source.slice(cursor, match.index)
-    );
+    html += renderContentSegment(source.slice(cursor, match.index));
 
     const item = byId.get(match[1]);
 
@@ -671,11 +565,7 @@ function renderArticleBody(content, media = []) {
               alt="${escapeHTML(item.caption || "Imagem da matéria")}"
               loading="lazy"
             >
-            ${
-              item.caption
-                ? `<figcaption>${escapeHTML(item.caption)}</figcaption>`
-                : ""
-            }
+            ${item.caption ? `<figcaption>${escapeHTML(item.caption)}</figcaption>` : ""}
           </figure>
         `;
       } else if (item.type === "video-upload") {
@@ -685,11 +575,7 @@ function renderArticleBody(content, media = []) {
               <source src="${escapeHTML(item.url)}">
               Seu navegador não conseguiu reproduzir este vídeo.
             </video>
-            ${
-              item.caption
-                ? `<p class="media-caption">${escapeHTML(item.caption)}</p>`
-                : ""
-            }
+            ${item.caption ? `<p class="media-caption">${escapeHTML(item.caption)}</p>` : ""}
           </div>
         `;
       } else {
@@ -709,9 +595,7 @@ function renderArticleBody(content, media = []) {
   return html;
 }
 
-/* =========================================================
-   ABRIR E FECHAR MATÉRIAS
-========================================================= */
+/* NAVEGAÇÃO E MATÉRIAS */
 
 function openArticle(id) {
   const article = allArticles.find(
@@ -727,40 +611,26 @@ function openArticle(id) {
   $("#adminPanel")?.classList.add("hidden");
 
   const view = $("#articleView");
-
   if (!view) return;
 
   view.classList.remove("hidden");
 
-  // Sempre usa o renderizador, mesmo quando não existem mídias.
-  // Isso corrige o HTML antigo aparecendo como texto na matéria.
   const inlineBody = renderArticleBody(
     article.content || "",
-    Array.isArray(article.inlineMedia)
-      ? article.inlineMedia
-      : []
+    Array.isArray(article.inlineMedia) ? article.inlineMedia : []
   );
 
   view.innerHTML = `
-    <a href="#inicio" class="back-link" data-home>
-      ← Voltar às notícias
-    </a>
+    <a href="#inicio" class="back-link" data-home>← Voltar às notícias</a>
 
     <header class="article-header">
       <span class="tag">
-        ${escapeHTML(categoryLabel(article.category))}
-        · ${escapeHTML(gameLabel(article.game))}
+        ${escapeHTML(categoryLabel(article.category))} ·
+        ${escapeHTML(gameLabel(article.game))}
       </span>
-
       <h1>${escapeHTML(article.title)}</h1>
-
-      <p class="article-summary">
-        ${escapeHTML(article.summary)}
-      </p>
-
-      <div class="meta">
-        ${escapeHTML(formatDate(articleDate(article)))}
-      </div>
+      <p class="article-summary">${escapeHTML(article.summary)}</p>
+      <div class="meta">${escapeHTML(formatDate(articleDate(article)))}</div>
     </header>
 
     ${
@@ -771,25 +641,15 @@ function openArticle(id) {
 
     ${buildVideoEmbed(article.videoUrl || article.video || "")}
 
-    <div class="article-content">
-      ${inlineBody}
-    </div>
+    <div class="article-content">${inlineBody}</div>
 
     <p class="source-note">
       Conteúdo do Rift Diário. Imagens e materiais de terceiros pertencem aos seus respectivos titulares.
     </p>
   `;
 
-  history.replaceState(
-    null,
-    "",
-    `#artigo/${encodeURIComponent(id)}`
-  );
-
-  window.scrollTo({
-    top: 0,
-    behavior: "smooth"
-  });
+  history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function goHome() {
@@ -801,16 +661,8 @@ function goHome() {
   }
 
   history.replaceState(null, "", "#inicio");
-
-  window.scrollTo({
-    top: 0,
-    behavior: "smooth"
-  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
-
-/* =========================================================
-   LOGIN E AUTORIZAÇÃO
-========================================================= */
 
 function openLogin() {
   const overlay = $("#loginOverlay");
@@ -832,11 +684,7 @@ function closeLogin() {
 }
 
 function requireAdmin() {
-  if (
-    !currentUser ||
-    currentUser.uid !== ADMIN_UID ||
-    !isAdmin
-  ) {
+  if (!currentUser || currentUser.uid !== ADMIN_UID || !isAdmin) {
     showToast("Entre com a conta autorizada para administrar as matérias.");
     openLogin();
     return false;
@@ -845,9 +693,7 @@ function requireAdmin() {
   return true;
 }
 
-/* =========================================================
-   ABAS DO PAINEL ADMINISTRATIVO
-========================================================= */
+/* PAINEL ADMINISTRATIVO */
 
 function setAdminTab(tab) {
   const validTabs = ["editor", "review", "manage"];
@@ -870,25 +716,17 @@ function setAdminTab(tab) {
   });
 
   Object.entries(panels).forEach(([name, panel]) => {
-    if (panel) {
-      panel.classList.toggle("hidden", name !== tab);
-    }
+    if (panel) panel.classList.toggle("hidden", name !== tab);
   });
 
   if (tab === "review") renderReviewQueue();
   if (tab === "manage") renderPublishedManage();
 }
 
-/* =========================================================
-   FORMULÁRIO DE MATÉRIAS
-========================================================= */
-
 function resetArticleForm() {
   $("#articleForm")?.reset();
 
-  if ($("#editingId")) {
-    $("#editingId").value = "";
-  }
+  if ($("#editingId")) $("#editingId").value = "";
 
   if ($("#saveArticleBtn")) {
     $("#saveArticleBtn").textContent = "Publicar matéria";
@@ -898,7 +736,6 @@ function resetArticleForm() {
 
   currentArticleId = null;
   inlineMediaDraft = [];
-  uploadInProgress = false;
 
   renderInlineMediaManager();
   updateInlinePreview();
@@ -911,10 +748,7 @@ function fillEditor(id) {
 
   currentArticleId = id;
 
-  if ($("#editingId")) {
-    $("#editingId").value = id;
-  }
-
+  $("#editingId").value = id;
   $("#articleTitle").value = article.title || "";
   $("#articleSummary").value = article.summary || "";
   $("#articleGame").value = article.game || "wild-rift";
@@ -922,8 +756,7 @@ function fillEditor(id) {
   $("#articleImage").value = article.image || "";
 
   if ($("#articleVideoUrl")) {
-    $("#articleVideoUrl").value =
-      article.videoUrl || article.video || "";
+    $("#articleVideoUrl").value = article.videoUrl || article.video || "";
   }
 
   $("#articleContent").value = article.content || "";
@@ -950,9 +783,7 @@ function fillEditor(id) {
   });
 }
 
-/* =========================================================
-   INSERÇÃO DE IMAGEM E VÍDEO NO TEXTO
-========================================================= */
+/* INSERÇÃO DE IMAGENS E VÍDEOS */
 
 function insertMarkerAtCursor(id) {
   const field = $("#articleContent");
@@ -999,18 +830,14 @@ function renderInlineMediaManager() {
                   : "VÍDEO POR LINK"
             }
           </span>
-
           <span class="inline-media-name">
             ${escapeHTML(item.caption || item.name || item.url)}
           </span>
-
           <button
             type="button"
             class="text-btn"
             data-remove-inline-media="${escapeHTML(item.id)}"
-          >
-            Remover
-          </button>
+          >Remover</button>
         </div>
       `).join("")
     : `<p class="form-hint">Nenhuma mídia inserida no corpo da matéria.</p>`;
@@ -1028,9 +855,16 @@ function updateInlinePreview() {
     `<p class="form-hint">A prévia da matéria com mídias aparecerá aqui.</p>`;
 }
 
+/* UPLOAD COM PROGRESSO E TRATAMENTO DE ERROS */
+
 async function uploadInlineFile(file, type) {
   if (!file) return;
   if (!requireAdmin()) return;
+
+  if (uploadInProgress) {
+    showToast("Já existe um envio em andamento.");
+    return;
+  }
 
   const isImage = type === "image";
 
@@ -1062,9 +896,7 @@ async function uploadInlineFile(file, type) {
     return;
   }
 
-  const id =
-    `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
+  const id = `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `articles-inline/${currentUser.uid}/${id}_${safeName}`;
 
@@ -1075,24 +907,45 @@ async function uploadInlineFile(file, type) {
   ].filter(Boolean);
 
   uploadInProgress = true;
-
   buttons.forEach(button => {
     button.disabled = true;
   });
 
-  showToast(`Enviando ${isImage ? "imagem" : "vídeo"}...`, 6000);
-
   try {
     const fileRef = storageRef(storage, path);
 
-    await uploadBytes(fileRef, file, {
+    const task = uploadBytesResumable(fileRef, file, {
       contentType: file.type,
       customMetadata: {
         uploadedBy: currentUser.uid
       }
     });
 
-    const url = await getDownloadURL(fileRef);
+    const url = await new Promise((resolve, reject) => {
+      task.on(
+        "state_changed",
+        snapshot => {
+          const percent = snapshot.totalBytes
+            ? Math.round(
+                snapshot.bytesTransferred / snapshot.totalBytes * 100
+              )
+            : 0;
+
+          showToast(
+            `Enviando ${isImage ? "imagem" : "vídeo"}: ${percent}%`,
+            2500
+          );
+        },
+        error => reject(error),
+        async () => {
+          try {
+            resolve(await getDownloadURL(task.snapshot.ref));
+          } catch (error) {
+            reject(error);
+          }
+        }
+      );
+    });
 
     const caption =
       $("#articleMediaCaption")?.value.trim() ||
@@ -1109,22 +962,31 @@ async function uploadInlineFile(file, type) {
 
     insertMarkerAtCursor(id);
     renderInlineMediaManager();
+    updateInlinePreview();
 
     showToast(
       `${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`
     );
   } catch (error) {
-    console.error(
-      "Erro ao enviar mídia para o Firebase Storage:",
-      error
-    );
+    console.error("Erro no upload do Firebase Storage:", error);
+
+    const messages = {
+      "storage/unauthorized":
+        "O Firebase Storage recusou o envio. Confira as regras de acesso.",
+      "storage/canceled":
+        "O envio foi cancelado.",
+      "storage/retry-limit-exceeded":
+        "O limite de tentativas foi atingido. Confira sua conexão.",
+      "storage/quota-exceeded":
+        "A cota de armazenamento do Firebase foi excedida.",
+      "storage/unknown":
+        "Erro desconhecido no Storage. Consulte o Console do navegador."
+    };
 
     showToast(
-      friendlyFirestoreError(
-        error,
-        "enviar a mídia. Confira se o Firebase Storage está habilitado e suas regras permitem upload administrativo."
-      ),
-      7000
+      messages[error?.code] ||
+        `Falha no upload: ${error?.code || error?.message || "erro desconhecido"}`,
+      8000
     );
   } finally {
     uploadInProgress = false;
@@ -1133,13 +995,8 @@ async function uploadInlineFile(file, type) {
       button.disabled = false;
     });
 
-    if ($("#uploadImageInput")) {
-      $("#uploadImageInput").value = "";
-    }
-
-    if ($("#uploadVideoInput")) {
-      $("#uploadVideoInput").value = "";
-    }
+    if ($("#uploadImageInput")) $("#uploadImageInput").value = "";
+    if ($("#uploadVideoInput")) $("#uploadVideoInput").value = "";
   }
 }
 
@@ -1162,9 +1019,7 @@ function insertVideoLinkAtCursor() {
     return;
   }
 
-  const id =
-    `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
+  const id = `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const caption = $("#articleMediaCaption")?.value.trim() || "";
 
   inlineMediaDraft.push({
@@ -1189,10 +1044,8 @@ function removeInlineMedia(id) {
   const field = $("#articleContent");
 
   if (field) {
-    const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
     field.value = field.value.replace(
-      new RegExp(`\\n?\\s*\\[\\[MEDIA:${escapedId}\\]\\]\\s*`, "g"),
+      new RegExp(`\\n?\\s*\\[\\[MEDIA:${id}\\]\\]\\s*`, "g"),
       "\n\n"
     );
   }
@@ -1201,12 +1054,10 @@ function removeInlineMedia(id) {
   updateInlinePreview();
 }
 
-/* =========================================================
-   SALVAR E PUBLICAR MATÉRIAS
-========================================================= */
+/* SALVAMENTO DAS MATÉRIAS */
 
-function articleFromForm(status) {
-  return {
+function articleFromForm(status, existingArticle = null) {
+  const payload = {
     title: $("#articleTitle").value.trim(),
     summary: $("#articleSummary").value.trim(),
     game: $("#articleGame").value,
@@ -1225,12 +1076,14 @@ function articleFromForm(status) {
     })),
 
     status,
-    updatedAt: serverTimestamp(),
-
-    ...(status === "published"
-      ? { publishedAt: serverTimestamp() }
-      : {})
+    updatedAt: serverTimestamp()
   };
+
+  if (status === "published" && !existingArticle?.publishedAt) {
+    payload.publishedAt = serverTimestamp();
+  }
+
+  return payload;
 }
 
 async function saveArticle(event, status) {
@@ -1240,13 +1093,13 @@ async function saveArticle(event, status) {
 
   const form = $("#articleForm");
 
-  if (!form || !form.reportValidity()) return;
+  if (!form.reportValidity()) return;
 
   const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
 
   if (videoUrl && !buildVideoEmbed(videoUrl)) {
     showToast(
-      "Link de vídeo não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou um arquivo MP4/WebM/OGG direto.",
+      "Link de vídeo não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou MP4/WebM/OGG.",
       6000
     );
     return;
@@ -1257,8 +1110,11 @@ async function saveArticle(event, status) {
     return;
   }
 
-  const editingId = currentArticleId;
-  const payload = articleFromForm(status);
+  const existingArticle = currentArticleId
+    ? allArticles.find(article => article.id === currentArticleId)
+    : null;
+
+  const payload = articleFromForm(status, existingArticle);
   const button = $("#saveArticleBtn");
 
   if (button) {
@@ -1267,9 +1123,9 @@ async function saveArticle(event, status) {
   }
 
   try {
-    if (editingId) {
+    if (currentArticleId) {
       await updateDoc(
-        doc(db, "articles", editingId),
+        doc(db, "articles", currentArticleId),
         payload
       );
 
@@ -1292,7 +1148,6 @@ async function saveArticle(event, status) {
     }
 
     resetArticleForm();
-
     setAdminTab(status === "draft" ? "review" : "manage");
   } catch (error) {
     console.error("Erro ao salvar matéria no Firestore:", error);
@@ -1313,85 +1168,58 @@ async function saveArticle(event, status) {
 
 function friendlyFirestoreError(error, action) {
   if (error?.code === "permission-denied") {
-    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore ou do Storage.`;
+    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
   }
 
   if (error?.code === "unavailable") {
-    return "O Firebase está indisponível no momento. Confira a conexão e tente novamente.";
+    return "O Firebase está indisponível. Confira a conexão e tente novamente.";
   }
 
   if (error?.code === "failed-precondition") {
-    return "O Firestore informou uma pré-condição ausente. Veja o erro no console do navegador.";
+    return "O Firestore informou uma pré-condição ausente. Veja o Console do navegador.";
   }
 
   return `Não foi possível ${action}. Código: ${error?.code || error?.message || "erro desconhecido"}.`;
 }
 
-/* =========================================================
-   LISTAS DO PAINEL ADMINISTRATIVO
-========================================================= */
+/* FILAS DO PAINEL ADMINISTRATIVO */
 
 function adminItem(article, mode) {
   const image = article.image
     ? `<img src="${escapeHTML(article.image)}" alt="" loading="lazy">`
     : `<div aria-hidden="true"></div>`;
 
-  const status =
-    article.status === "published"
-      ? "Publicada"
-      : article.status === "review"
-        ? "Em revisão"
-        : "Rascunho";
+  const status = article.status === "published"
+    ? "Publicada"
+    : article.status === "review"
+      ? "Em revisão"
+      : "Rascunho";
 
   const actionButtons = mode === "review"
     ? `
-      <button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">
-        Aprovar e publicar
-      </button>
-
-      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">
-        Editar
-      </button>
-
-      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">
-        Excluir
-      </button>
+      <button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">Aprovar e publicar</button>
+      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">Editar</button>
+      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">Excluir</button>
     `
     : `
-      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">
-        Editar
-      </button>
-
+      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">Editar</button>
       ${
         article.status !== "published"
           ? `<button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">Publicar</button>`
           : `<button class="secondary-btn" data-article-action="draft" data-id="${escapeHTML(article.id)}">Tornar rascunho</button>`
       }
-
-      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">
-        Excluir
-      </button>
+      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">Excluir</button>
     `;
 
   return `
     <article class="admin-item">
       ${image}
-
       <div>
         <h3>${escapeHTML(article.title || "Sem título")}</h3>
-
-        <p>
-          ${escapeHTML(status)}
-          · ${escapeHTML(gameLabel(article.game))}
-          · ${escapeHTML(categoryLabel(article.category))}
-        </p>
-
+        <p>${escapeHTML(status)} · ${escapeHTML(gameLabel(article.game))} · ${escapeHTML(categoryLabel(article.category))}</p>
         <p>${escapeHTML(article.summary || "Sem resumo")}</p>
       </div>
-
-      <div class="admin-item-actions">
-        ${actionButtons}
-      </div>
+      <div class="admin-item-actions">${actionButtons}</div>
     </article>
   `;
 }
@@ -1402,10 +1230,8 @@ function renderReviewQueue() {
   if (!host) return;
 
   const items = sortNewest(
-    allArticles.filter(
-      article =>
-        article.status === "draft" ||
-        article.status === "review"
+    allArticles.filter(article =>
+      article.status === "draft" || article.status === "review"
     )
   );
 
@@ -1450,24 +1276,23 @@ async function handleArticleAction(event) {
     }
 
     if (action === "delete") {
-      if (
-        !confirm(
-          `Excluir a matéria “${article.title}”? Esta ação não pode ser desfeita.`
-        )
-      ) {
+      if (!confirm(`Excluir a matéria “${article.title}”? Esta ação não pode ser desfeita.`)) {
         return;
       }
 
       await deleteDoc(doc(db, "articles", id));
-
       showToast("Matéria excluída.");
     } else if (action === "publish") {
-      await updateDoc(doc(db, "articles", id), {
+      const payload = {
         status: "published",
-        publishedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      });
+      };
 
+      if (!article.publishedAt) {
+        payload.publishedAt = serverTimestamp();
+      }
+
+      await updateDoc(doc(db, "articles", id), payload);
       showToast("Matéria publicada.");
     } else if (action === "draft") {
       await updateDoc(doc(db, "articles", id), {
@@ -1487,14 +1312,10 @@ async function handleArticleAction(event) {
   }
 }
 
-/* =========================================================
-   FIRESTORE — CARREGAMENTO PÚBLICO E ADMINISTRATIVO
-========================================================= */
+/* FIRESTORE: NOTÍCIAS PÚBLICAS E PAINEL ADMINISTRATIVO */
 
 function startPublicListener() {
-  if (unsubscribePublic) {
-    unsubscribePublic();
-  }
+  if (unsubscribePublic) unsubscribePublic();
 
   const publishedQuery = query(
     articlesRef,
@@ -1510,19 +1331,13 @@ function startPublicListener() {
       }));
 
       if (isAdmin) {
-        const unpublishedItems = allArticles.filter(
-          article => article.status !== "published"
-        );
-
         allArticles = [
-          ...unpublishedItems,
+          ...allArticles.filter(article => article.status !== "published"),
           ...publicItems
         ];
 
         allArticles = [
-          ...new Map(
-            allArticles.map(article => [article.id, article])
-          ).values()
+          ...new Map(allArticles.map(article => [article.id, article])).values()
         ];
       } else {
         allArticles = publicItems;
@@ -1536,10 +1351,7 @@ function startPublicListener() {
       }
     },
     error => {
-      console.error(
-        "Erro ao carregar notícias públicas do Firestore:",
-        error
-      );
+      console.error("Erro ao carregar notícias públicas:", error);
 
       const grid = $("#newsGrid");
 
@@ -1562,14 +1374,10 @@ function startPublicListener() {
       );
     }
   );
-
-  publicListenerStarted = true;
 }
 
 function startAdminListener() {
-  if (unsubscribeAdmin) {
-    unsubscribeAdmin();
-  }
+  if (unsubscribeAdmin) unsubscribeAdmin();
 
   unsubscribeAdmin = onSnapshot(
     articlesRef,
@@ -1584,10 +1392,7 @@ function startAdminListener() {
       renderPublishedManage();
     },
     error => {
-      console.error(
-        "Erro ao carregar painel editorial:",
-        error
-      );
+      console.error("Erro ao carregar painel editorial:", error);
 
       showToast(
         friendlyFirestoreError(error, "carregar o painel editorial"),
@@ -1597,9 +1402,7 @@ function startAdminListener() {
   );
 }
 
-/* =========================================================
-   ESTADO DE AUTENTICAÇÃO
-========================================================= */
+/* BOTÃO LOGIN / PAINEL ADM */
 
 function setAdminState(user) {
   currentUser = user;
@@ -1608,26 +1411,34 @@ function setAdminState(user) {
   const adminButton = $("#adminBtn");
 
   if (adminButton) {
-    adminButton.textContent = "Painel ADM";
+    adminButton.innerHTML = isAdmin
+      ? `
+        <svg class="admin-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M15 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M19 8v6M16 11h6"></path>
+        </svg>
+        <span>Painel ADM</span>
+      `
+      : `
+        <svg class="admin-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M15 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M20 8v6M17 11h6"></path>
+        </svg>
+        <span>Login</span>
+      `;
   }
 
   $("#logoutBtn")?.classList.toggle("hidden", !isAdmin);
 
   if (isAdmin) {
     $("#adminPanel")?.classList.remove("hidden");
-
     closeLogin();
 
     if (unsubscribePublic) {
       unsubscribePublic();
       unsubscribePublic = null;
-    }
-
-    publicListenerStarted = false;
-
-    if (unsubscribeAdmin) {
-      unsubscribeAdmin();
-      unsubscribeAdmin = null;
     }
 
     startAdminListener();
@@ -1639,25 +1450,17 @@ function setAdminState(user) {
       unsubscribeAdmin = null;
     }
 
-    if (!publicListenerStarted || !unsubscribePublic) {
-      startPublicListener();
-    }
+    startPublicListener();
 
-    // Uma conta que não seja a administradora é desconectada.
     if (user) {
       signOut(auth).catch(error => {
-        console.error(
-          "Erro ao encerrar sessão não autorizada:",
-          error
-        );
+        console.error("Erro ao encerrar sessão não autorizada:", error);
       });
     }
   }
 }
 
-/* =========================================================
-   EVENTOS DA INTERFACE
-========================================================= */
+/* EVENTOS */
 
 function setupEvents() {
   $("#adminBtn")?.addEventListener("click", () => {
@@ -1680,17 +1483,11 @@ function setupEvents() {
 
   $("#loginForm")?.addEventListener("submit", async event => {
     event.preventDefault();
-
     setLoginError("");
 
     const email = $("#adminEmail")?.value.trim();
     const password = $("#adminPassword")?.value;
     const button = $("#loginSubmitBtn");
-
-    if (!email || !password) {
-      setLoginError("Informe o e-mail e a senha.");
-      return;
-    }
 
     if (button) {
       button.disabled = true;
@@ -1712,10 +1509,7 @@ function setupEvents() {
         );
       } else {
         closeLogin();
-
-        showToast(
-          "Login realizado. Carregando painel editorial..."
-        );
+        showToast("Login realizado. Carregando painel editorial...");
       }
     } catch (error) {
       console.error("Erro no login Firebase:", error);
@@ -1745,13 +1539,10 @@ function setupEvents() {
   $("#logoutBtn")?.addEventListener("click", async () => {
     try {
       await signOut(auth);
-
       showToast("Sessão encerrada.");
-
       $("#homeView")?.classList.remove("hidden");
     } catch (error) {
       console.error("Erro ao sair:", error);
-
       showToast("Não foi possível encerrar a sessão.");
     }
   });
@@ -1764,10 +1555,7 @@ function setupEvents() {
     saveArticle(null, "draft");
   });
 
-  $("#cancelEditBtn")?.addEventListener(
-    "click",
-    resetArticleForm
-  );
+  $("#cancelEditBtn")?.addEventListener("click", resetArticleForm);
 
   $("#uploadImageBtn")?.addEventListener("click", () => {
     $("#uploadImageInput")?.click();
@@ -1785,20 +1573,12 @@ function setupEvents() {
     uploadInlineFile(event.target.files?.[0], "video");
   });
 
-  $("#insertVideoLinkBtn")?.addEventListener(
-    "click",
-    insertVideoLinkAtCursor
-  );
+  $("#insertVideoLinkBtn")?.addEventListener("click", insertVideoLinkAtCursor);
 
-  $("#articleContent")?.addEventListener(
-    "input",
-    updateInlinePreview
-  );
+  $("#articleContent")?.addEventListener("input", updateInlinePreview);
 
   $("#inlineMediaList")?.addEventListener("click", event => {
-    const button = event.target.closest(
-      "[data-remove-inline-media]"
-    );
+    const button = event.target.closest("[data-remove-inline-media]");
 
     if (button) {
       removeInlineMedia(button.dataset.removeInlineMedia);
@@ -1811,19 +1591,11 @@ function setupEvents() {
     if (!button) return;
 
     event.preventDefault();
-
     setAdminTab(button.dataset.adminTab);
   });
 
-  $("#reviewQueue")?.addEventListener(
-    "click",
-    handleArticleAction
-  );
-
-  $("#publishedManage")?.addEventListener(
-    "click",
-    handleArticleAction
-  );
+  $("#reviewQueue")?.addEventListener("click", handleArticleAction);
+  $("#publishedManage")?.addEventListener("click", handleArticleAction);
 
   $$("[data-category]").forEach(button => {
     button.addEventListener("click", () => {
@@ -1893,9 +1665,7 @@ function setupEvents() {
   });
 }
 
-/* =========================================================
-   INICIALIZAÇÃO
-========================================================= */
+/* INICIALIZAÇÃO */
 
 function initialize() {
   setupEvents();
@@ -1904,10 +1674,7 @@ function initialize() {
     auth,
     user => setAdminState(user),
     error => {
-      console.error(
-        "Erro no estado de autenticação:",
-        error
-      );
+      console.error("Erro no estado de autenticação:", error);
 
       showToast(
         "Não foi possível verificar a sessão administrativa. Veja o Console.",
@@ -1925,12 +1692,17 @@ function initialize() {
   }
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener(
-    "DOMContentLoaded",
-    initialize,
-    { once: true }
+try {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initialize, { once: true });
+  } else {
+    initialize();
+  }
+} catch (error) {
+  console.error("Falha ao iniciar o Rift Diário:", error);
+
+  showToast(
+    "O site encontrou um erro ao iniciar. Abra o Console para ver os detalhes.",
+    6000
   );
-} else {
-  initialize();
 }
