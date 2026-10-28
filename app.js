@@ -2,6 +2,9 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/fireba
 import {
   getAuth,
   signInWithEmailAndPassword,
+  GoogleAuthProvider,
+  OAuthProvider,
+  signInWithPopup,
   onAuthStateChanged,
   signOut
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
@@ -15,13 +18,16 @@ import {
   onSnapshot,
   query,
   where,
-  serverTimestamp
+  serverTimestamp,
+  setDoc,
+  getDoc
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 import {
   getStorage,
   ref as storageRef,
   uploadBytesResumable,
-  getDownloadURL
+  getDownloadURL,
+  deleteObject
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
 /* Rift Diário — configuração original preservada */
@@ -51,13 +57,17 @@ let isAdmin = false;
 let allArticles = [];
 let visibleArticles = [];
 let activeCategory = "all";
-let activeAdminTab = "editor";
 let currentArticleId = null;
 let inlineMediaDraft = [];
 let uploadInProgress = false;
 let unsubscribePublic = null;
 let unsubscribeAdmin = null;
 let toastTimer = null;
+let editorSavedRange = null;
+let unsubscribeRatings = null;
+let unsubscribeComments = null;
+let activeFeedbackArticleId = null;
+let editingCommentId = null;
 
 const PAGE_SIZE = 9;
 let shownCount = PAGE_SIZE;
@@ -139,18 +149,21 @@ function articleDate(article) {
   return article.publishedAt || article.updatedAt || article.createdAt || null;
 }
 
+/* Ordena as matérias sem converter repetidamente as mesmas datas. */
 function sortNewest(list) {
-  return [...list].sort((a, b) => {
-    const dateA = articleDate(a)?.toDate
-      ? articleDate(a).toDate().getTime()
-      : new Date(articleDate(a) || 0).getTime();
+  const timestamp = article => {
+    const value = articleDate(article);
+    const date = value?.toDate
+      ? value.toDate()
+      : value
+        ? new Date(value)
+        : null;
 
-    const dateB = articleDate(b)?.toDate
-      ? articleDate(b).toDate().getTime()
-      : new Date(articleDate(b) || 0).getTime();
+    const time = date?.getTime();
+    return Number.isFinite(time) ? time : 0;
+  };
 
-    return dateB - dateA;
-  });
+  return [...list].sort((a, b) => timestamp(b) - timestamp(a));
 }
 
 function normalized(value) {
@@ -238,13 +251,19 @@ function sanitizeArticleHTML(html) {
         } else if (name === "href") {
           const url = safeUrl(attr.value);
 
-          if (url) node.setAttribute("href", url);
-          else node.removeAttribute("href");
+          if (url) {
+            node.setAttribute("href", url);
+          } else {
+            node.removeAttribute("href");
+          }
         } else if (name === "src") {
           const url = safeUrl(attr.value, true);
 
-          if (url) node.setAttribute("src", url);
-          else node.removeAttribute("src");
+          if (url) {
+            node.setAttribute("src", url);
+          } else {
+            node.removeAttribute("src");
+          }
         }
       }
 
@@ -270,7 +289,7 @@ function renderContentSegment(value) {
   if (!text) return "";
 
   const hasHTML =
-    /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code|div|span|section|small|sub|sup|mark)\b[^>]*>/i
+    /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|figcaption|table|thead|tbody|tr|th|td|hr|pre|code|div|span|section|small|sub|sup|mark)\b[^>]*>/i
       .test(text);
 
   if (hasHTML) {
@@ -544,7 +563,7 @@ function renderArticleBody(content, media = []) {
   );
 
   const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
-  const source = String(content || "");
+    const source = String(content || "");
 
   let html = "";
   let cursor = 0;
@@ -594,6 +613,442 @@ function renderArticleBody(content, media = []) {
   return html;
 }
 
+/* AVALIAÇÕES, COMENTÁRIOS E LOGIN SOCIAL */
+
+function installFeedbackStyles() {
+  if ($("#rift-feedback-styles")) return;
+
+  const style = document.createElement("style");
+  style.id = "rift-feedback-styles";
+  style.textContent = `
+    .rift-feedback{margin:32px 0;padding:24px;border:1px solid var(--border,#29374d);border-radius:16px;background:var(--panel,#0e1626);color:var(--text,#f4f7fb)}
+    .rift-feedback h2,.rift-feedback h3{margin:0 0 12px}
+    .rift-feedback p{line-height:1.6}
+    .rift-rating-row{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+    .rift-feedback button{cursor:pointer}
+    .rift-feedback-btn{border:1px solid var(--border,#29374d);background:var(--panel-light,#151f31);color:inherit;border-radius:10px;padding:10px 14px;font:inherit}
+    .rift-feedback-btn.active,.rift-feedback-btn:hover{border-color:#d9b45b;color:#f5d477}
+    .rift-comment-form{display:grid;gap:10px;margin:18px 0}
+    .rift-comment-form textarea{width:100%;min-height:100px;resize:vertical;padding:12px;border:1px solid var(--border,#29374d);border-radius:10px;background:#080d18;color:#fff;font:inherit}
+    .rift-comment{padding:14px 0;border-top:1px solid var(--border,#29374d)}
+    .rift-comment-meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:#aab6c8;font-size:.88rem}
+    .rift-comment-body{white-space:pre-wrap;overflow-wrap:anywhere}
+    .rift-comment-actions{display:flex;gap:8px;margin-top:8px}
+    .rift-feedback-note{color:#aab6c8;font-size:.9rem}
+    .rift-social-login{display:grid;gap:10px;margin-top:16px}
+    .rift-social-btn{width:100%;border:1px solid var(--border,#29374d);border-radius:10px;padding:12px;background:var(--panel-light,#151f31);color:#fff;font:inherit;font-weight:700;cursor:pointer}
+    .rift-social-btn:hover{border-color:#d9b45b}
+    .rift-social-label{margin:16px 0 0;color:#aab6c8;font-size:.88rem}
+    @media(max-width:600px){.rift-feedback{padding:16px}.rift-rating-row{display:grid;grid-template-columns:1fr 1fr}.rift-feedback-btn{width:100%}}
+  `;
+
+  document.head.appendChild(style);
+}
+
+function ensureSocialLoginButtons() {
+  const form = $("#loginForm");
+  if (!form || $("#riftSocialLogin")) return;
+
+  const social = document.createElement("div");
+  social.id = "riftSocialLogin";
+  social.className = "rift-social-login";
+  social.innerHTML = `
+    <p class="rift-social-label">Para avaliar e comentar, entre com sua conta:</p>
+    <button type="button" class="rift-social-btn" id="riftGoogleLogin">Continuar com Google</button>
+    <button type="button" class="rift-social-btn" id="riftAppleLogin">Continuar com Apple</button>
+  `;
+
+  form.insertAdjacentElement("afterend", social);
+
+  $("#riftGoogleLogin")?.addEventListener("click", () => socialSignIn("google"));
+  $("#riftAppleLogin")?.addEventListener("click", () => socialSignIn("apple"));
+}
+
+async function socialSignIn(providerName) {
+  setLoginError("");
+
+  try {
+    let provider;
+
+    if (providerName === "google") {
+      provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+    } else {
+      provider = new OAuthProvider("apple.com");
+      provider.addScope("email");
+      provider.addScope("name");
+    }
+
+    await signInWithPopup(auth, provider);
+    closeLogin();
+    showToast("Login realizado. Você já pode avaliar e comentar.");
+  } catch (error) {
+    console.error("Erro no login social:", error);
+
+    const messages = {
+      "auth/popup-closed-by-user": "A janela de login foi fechada antes da conclusão.",
+      "auth/popup-blocked": "O navegador bloqueou a janela. Permita pop-ups e tente novamente.",
+      "auth/operation-not-allowed": "Ative esse provedor em Firebase > Authentication > Sign-in method.",
+      "auth/unauthorized-domain": "Adicione o domínio do site à lista de domínios autorizados do Firebase.",
+      "auth/account-exists-with-different-credential": "Já existe uma conta com esse e-mail usando outro método de login."
+    };
+
+    setLoginError(
+      messages[error.code] ||
+      `Não foi possível entrar: ${error.message || error.code}`
+    );
+  }
+}
+
+function stopFeedbackListeners() {
+  if (unsubscribeRatings) unsubscribeRatings();
+  if (unsubscribeComments) unsubscribeComments();
+
+  unsubscribeRatings = null;
+  unsubscribeComments = null;
+  activeFeedbackArticleId = null;
+}
+
+function renderFeedbackSection(articleId) {
+  const host = $("#riftFeedback");
+  if (!host) return;
+
+  const user = currentUser;
+
+  host.innerHTML = `
+    <section class="rift-feedback" aria-labelledby="riftFeedbackTitle">
+      <h2 id="riftFeedbackTitle">Avaliações e comentários</h2>
+      <p class="rift-feedback-note" id="riftRatingSummary">Carregando avaliações…</p>
+
+      <div class="rift-rating-row" role="group" aria-label="Avalie esta matéria">
+        <button class="rift-feedback-btn" type="button" data-rating="1">👍 Gostei</button>
+        <button class="rift-feedback-btn" type="button" data-rating="-1">👎 Não gostei</button>
+        <button class="rift-feedback-btn" type="button" data-rating="0">Remover minha avaliação</button>
+      </div>
+
+      <p class="rift-feedback-note" id="riftFeedbackAuthNote">
+        ${user
+          ? `Conectado como ${escapeHTML(user.displayName || user.email || "leitor")}.`
+          : "Entre com Google ou Apple para avaliar e comentar."}
+      </p>
+
+      <form class="rift-comment-form" id="riftCommentForm">
+        <label for="riftCommentText">Seu comentário</label>
+        <textarea
+          id="riftCommentText"
+          maxlength="3000"
+          placeholder="Escreva um comentário respeitoso…"
+          required
+          ${user ? "" : "disabled"}
+        ></textarea>
+
+        <div class="rift-rating-row">
+          <button
+            class="rift-feedback-btn"
+            id="riftCommentSubmit"
+            type="submit"
+            ${user ? "" : "disabled"}
+          >Publicar comentário</button>
+
+          <button
+            class="rift-feedback-btn"
+            id="riftCommentCancel"
+            type="button"
+            hidden
+          >Cancelar edição</button>
+        </div>
+      </form>
+
+      <h3>Comentários dos leitores</h3>
+      <div id="riftCommentsList">
+        <p class="rift-feedback-note">Carregando comentários…</p>
+      </div>
+    </section>
+  `;
+
+  host.querySelectorAll("[data-rating]").forEach(button => {
+    button.addEventListener("click", () => {
+      submitRating(articleId, Number(button.dataset.rating));
+    });
+  });
+
+  $("#riftCommentForm")?.addEventListener("submit", event => {
+    submitComment(event, articleId);
+  });
+
+  $("#riftCommentCancel")?.addEventListener("click", resetCommentEditor);
+
+  $("#riftCommentsList")?.addEventListener("click", event => {
+    handleCommentAction(event, articleId);
+  });
+
+  watchArticleFeedback(articleId);
+}
+
+function watchArticleFeedback(articleId) {
+  stopFeedbackListeners();
+  activeFeedbackArticleId = articleId;
+
+  const ratingsRef = collection(db, "articles", articleId, "ratings");
+  const commentsRef = collection(db, "articles", articleId, "comments");
+
+  unsubscribeRatings = onSnapshot(
+    ratingsRef,
+    snapshot => {
+      let positive = 0;
+      let negative = 0;
+      let mine = 0;
+
+      snapshot.forEach(item => {
+        const value = Number(item.data().value);
+
+        if (value === 1) positive++;
+        if (value === -1) negative++;
+
+        if (currentUser && item.id === currentUser.uid) {
+          mine = value;
+        }
+      });
+
+      const summary = $("#riftRatingSummary");
+
+      if (summary) {
+        summary.textContent =
+          `${positive} gostaram · ${negative} não gostaram · ${positive + negative} avaliação(ões)`;
+      }
+
+      $("#riftFeedback [data-rating=\"1\"]")?.classList.toggle("active", mine === 1);
+      $("#riftFeedback [data-rating=\"-1\"]")?.classList.toggle("active", mine === -1);
+    },
+    error => {
+      console.error("Erro ao carregar avaliações:", error);
+
+      const summary = $("#riftRatingSummary");
+
+      if (summary) {
+        summary.textContent =
+          "Não foi possível carregar as avaliações. Confira as regras do Firestore.";
+      }
+    }
+  );
+
+  unsubscribeComments = onSnapshot(
+    commentsRef,
+    snapshot => {
+      const items = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      items.sort((a, b) => {
+        const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+        const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        return tb - ta;
+      });
+
+      renderComments(items, articleId);
+    },
+    error => {
+      console.error("Erro ao carregar comentários:", error);
+
+      const list = $("#riftCommentsList");
+
+      if (list) {
+        list.innerHTML =
+          '<p class="rift-feedback-note">Não foi possível carregar os comentários. Confira as regras do Firestore.</p>';
+      }
+    }
+  );
+}
+
+function renderComments(items, articleId) {
+  const host = $("#riftCommentsList");
+  if (!host) return;
+
+  if (!items.length) {
+    host.innerHTML =
+      '<p class="rift-feedback-note">Ainda não há comentários nesta matéria.</p>';
+    return;
+  }
+
+  host.innerHTML = items.map(item => {
+    const mine = Boolean(currentUser && item.uid === currentUser.uid);
+    const author = item.displayName || "Leitor do Rift Diário";
+
+    return `
+      <article class="rift-comment">
+        <div class="rift-comment-meta">
+          <strong>${escapeHTML(author)}</strong>
+          <span>${escapeHTML(formatDate(item.createdAt))}</span>
+          ${item.updatedAt ? "<span>(editado)</span>" : ""}
+        </div>
+
+        <p class="rift-comment-body">${escapeHTML(item.text || "")}</p>
+
+        ${mine ? `
+          <div class="rift-comment-actions">
+            <button type="button" class="rift-feedback-btn" data-comment-edit="${escapeHTML(item.id)}">Editar</button>
+            <button type="button" class="rift-feedback-btn" data-comment-delete="${escapeHTML(item.id)}">Excluir</button>
+          </div>
+        ` : ""}
+      </article>
+    `;
+  }).join("");
+}
+
+async function submitRating(articleId, value) {
+  if (!currentUser) {
+    openLogin();
+    showToast("Entre com Google ou Apple para avaliar esta matéria.");
+    return;
+  }
+
+  if (isAdmin) {
+    showToast("Use uma conta de leitor para avaliar matérias.");
+    return;
+  }
+
+  try {
+    const ratingRef = doc(db, "articles", articleId, "ratings", currentUser.uid);
+
+    if (value === 0) {
+      await deleteDoc(ratingRef);
+      showToast("Sua avaliação foi removida.");
+    } else {
+      await setDoc(ratingRef, {
+        value,
+        uid: currentUser.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      showToast(
+        value === 1
+          ? "Você avaliou positivamente esta matéria."
+          : "Você avaliou negativamente esta matéria."
+      );
+    }
+  } catch (error) {
+    console.error("Erro ao salvar avaliação:", error);
+    showToast(friendlyFirestoreError(error, "salvar sua avaliação"), 6000);
+  }
+}
+
+function resetCommentEditor() {
+  editingCommentId = null;
+
+  const form = $("#riftCommentForm");
+  form?.reset();
+
+  const submit = $("#riftCommentSubmit");
+  if (submit) submit.textContent = "Publicar comentário";
+
+  const cancel = $("#riftCommentCancel");
+  if (cancel) cancel.hidden = true;
+}
+
+async function submitComment(event, articleId) {
+  event.preventDefault();
+
+  if (!currentUser) {
+    openLogin();
+    return;
+  }
+
+  if (isAdmin) {
+    showToast("Use uma conta de leitor para comentar.");
+    return;
+  }
+
+  const field = $("#riftCommentText");
+  const text = field?.value.trim() || "";
+
+  if (text.length < 2) {
+    showToast("Escreva um comentário com pelo menos 2 caracteres.");
+    return;
+  }
+
+  if (text.length > 3000) {
+    showToast("O comentário pode ter no máximo 3.000 caracteres.");
+    return;
+  }
+
+  try {
+    if (editingCommentId) {
+      await updateDoc(
+        doc(db, "articles", articleId, "comments", editingCommentId),
+        {
+          text,
+          updatedAt: serverTimestamp()
+        }
+      );
+
+      showToast("Comentário atualizado.");
+    } else {
+      await addDoc(collection(db, "articles", articleId, "comments"), {
+        uid: currentUser.uid,
+        displayName: currentUser.displayName || "Leitor do Rift Diário",
+        text,
+        createdAt: serverTimestamp(),
+        updatedAt: null
+      });
+
+      showToast("Comentário publicado.");
+    }
+
+    resetCommentEditor();
+  } catch (error) {
+    console.error("Erro ao salvar comentário:", error);
+    showToast(friendlyFirestoreError(error, "salvar o comentário"), 6000);
+  }
+}
+
+async function handleCommentAction(event, articleId) {
+  const edit = event.target.closest("[data-comment-edit]");
+  const del = event.target.closest("[data-comment-delete]");
+
+  if (!edit && !del) return;
+  if (!currentUser) return;
+
+  const id = (edit || del).dataset.commentEdit ||
+    (edit || del).dataset.commentDelete;
+
+  try {
+    const commentRef = doc(db, "articles", articleId, "comments", id);
+
+    if (del) {
+      if (!confirm("Excluir seu comentário? Esta ação não pode ser desfeita.")) {
+        return;
+      }
+
+      await deleteDoc(commentRef);
+
+      if (editingCommentId === id) {
+        resetCommentEditor();
+      }
+
+      showToast("Comentário excluído.");
+      return;
+    }
+
+    const snap = await getDoc(commentRef);
+
+    if (!snap.exists() || snap.data().uid !== currentUser.uid) {
+      showToast("Você só pode editar seus próprios comentários.");
+      return;
+    }
+
+    editingCommentId = id;
+    $("#riftCommentText").value = snap.data().text || "";
+    $("#riftCommentSubmit").textContent = "Salvar alterações";
+    $("#riftCommentCancel").hidden = false;
+    $("#riftCommentText").focus();
+  } catch (error) {
+    console.error("Erro ao alterar comentário:", error);
+    showToast(friendlyFirestoreError(error, "alterar o comentário"), 6000);
+  }
+}
+
 /* NAVEGAÇÃO E MATÉRIAS */
 
 function openArticle(id) {
@@ -614,6 +1069,9 @@ function openArticle(id) {
 
   view.classList.remove("hidden");
 
+  installFeedbackStyles();
+  stopFeedbackListeners();
+
   const inlineBody = renderArticleBody(
     article.content || "",
     Array.isArray(article.inlineMedia) ? article.inlineMedia : []
@@ -627,6 +1085,7 @@ function openArticle(id) {
         ${escapeHTML(categoryLabel(article.category))} ·
         ${escapeHTML(gameLabel(article.game))}
       </span>
+
       <h1>${escapeHTML(article.title)}</h1>
       <p class="article-summary">${escapeHTML(article.summary)}</p>
       <div class="meta">${escapeHTML(formatDate(articleDate(article)))}</div>
@@ -642,16 +1101,20 @@ function openArticle(id) {
 
     <div class="article-content">${inlineBody}</div>
 
+    <div id="riftFeedback"></div>
+
     <p class="source-note">
       Conteúdo do Rift Diário. Imagens e materiais de terceiros pertencem aos seus respectivos titulares.
     </p>
   `;
 
+  renderFeedbackSection(id);
   history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function goHome() {
+  stopFeedbackListeners();
   $("#articleView")?.classList.add("hidden");
   $("#homeView")?.classList.remove("hidden");
 
@@ -672,6 +1135,7 @@ function openLogin() {
   }
 
   setLoginError("");
+  ensureSocialLoginButtons();
   overlay.classList.remove("hidden");
 
   setTimeout(() => $("#adminEmail")?.focus(), 50);
@@ -698,8 +1162,6 @@ function setAdminTab(tab) {
   const validTabs = ["editor", "review", "manage"];
 
   if (!validTabs.includes(tab)) return;
-
-  activeAdminTab = tab;
 
   const panels = {
     editor: $("#editorTab"),
@@ -735,6 +1197,11 @@ function resetArticleForm() {
 
   currentArticleId = null;
   inlineMediaDraft = [];
+  editorSavedRange = null;
+
+  if ($("#articleContent")) {
+    $("#articleContent").innerHTML = "";
+  }
 
   renderInlineMediaManager();
   updateInlinePreview();
@@ -758,7 +1225,7 @@ function fillEditor(id) {
     $("#articleVideoUrl").value = article.videoUrl || article.video || "";
   }
 
-  $("#articleContent").value = article.content || "";
+  $("#articleContent").innerHTML = sanitizeArticleHTML(article.content || "");
 
   inlineMediaDraft = Array.isArray(article.inlineMedia)
     ? article.inlineMedia.map(item => ({ ...item }))
@@ -784,37 +1251,77 @@ function fillEditor(id) {
 
 /* INSERÇÃO DE IMAGENS E VÍDEOS */
 
+function saveEditorRange() {
+  const editor = $("#articleContent");
+  const selection = window.getSelection();
+
+  if (!editor || !selection || selection.rangeCount === 0) return;
+
+  const range = selection.getRangeAt(0);
+
+  if (
+    editor.contains(range.commonAncestorContainer) ||
+    range.commonAncestorContainer === editor
+  ) {
+    editorSavedRange = range.cloneRange();
+  }
+}
+
+function restoreEditorRange() {
+  const editor = $("#articleContent");
+  if (!editor) return null;
+
+  editor.focus({ preventScroll: true });
+
+  const selection = window.getSelection();
+  if (!selection) return null;
+
+  let range = editorSavedRange;
+
+  if (
+    !range ||
+    !(
+      editor.contains(range.commonAncestorContainer) ||
+      range.commonAncestorContainer === editor
+    )
+  ) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  return range;
+}
 function insertMarkerAtCursor(id) {
-  const field = $("#articleContent");
+  const editor = $("#articleContent");
+  if (!editor) return;
 
-  if (!field) return;
+  const range = restoreEditorRange();
+  if (!range) return;
 
-  const marker = `\n\n[[MEDIA:${id}]]\n\n`;
+  const marker = document.createTextNode(`[[MEDIA:${id}]]`);
 
-  const start = Number.isInteger(field.selectionStart)
-    ? field.selectionStart
-    : field.value.length;
+  range.deleteContents();
+  range.insertNode(marker);
+  range.setStartAfter(marker);
+  range.collapse(true);
 
-  const end = Number.isInteger(field.selectionEnd)
-    ? field.selectionEnd
-    : field.value.length;
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 
-  field.value =
-    field.value.slice(0, start) +
-    marker +
-    field.value.slice(end);
+  editorSavedRange = range.cloneRange();
 
-  const cursor = start + marker.length;
-
-  field.focus();
-  field.setSelectionRange(cursor, cursor);
-
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+  saveEditorRange();
   updateInlinePreview();
 }
 
 function renderInlineMediaManager() {
   const host = $("#inlineMediaList");
-
   if (!host) return;
 
   host.innerHTML = inlineMediaDraft.length
@@ -829,9 +1336,11 @@ function renderInlineMediaManager() {
                   : "VÍDEO POR LINK"
             }
           </span>
+
           <span class="inline-media-name">
             ${escapeHTML(item.caption || item.name || item.url)}
           </span>
+
           <button
             type="button"
             class="text-btn"
@@ -844,10 +1353,9 @@ function renderInlineMediaManager() {
 
 function updateInlinePreview() {
   const host = $("#inlineMediaPreview");
-
   if (!host) return;
 
-  const content = $("#articleContent")?.value || "";
+  const content = $("#articleContent")?.innerHTML || "";
 
   host.innerHTML =
     renderArticleBody(content, inlineMediaDraft) ||
@@ -900,12 +1408,14 @@ async function uploadInlineFile(file, type) {
   const path = `articles-inline/${currentUser.uid}/${id}_${safeName}`;
 
   const buttons = [
-    $("#uploadImageBtn"),
-    $("#uploadVideoBtn"),
-    $("#insertVideoLinkBtn")
+    $("#insertImageBtn"),
+    $("#insertVideoBtn"),
+    $("#editorImageInput"),
+    $("#editorVideoInput")
   ].filter(Boolean);
 
   uploadInProgress = true;
+
   buttons.forEach(button => {
     button.disabled = true;
   });
@@ -925,9 +1435,7 @@ async function uploadInlineFile(file, type) {
         "state_changed",
         snapshot => {
           const percent = snapshot.totalBytes
-            ? Math.round(
-                snapshot.bytesTransferred / snapshot.totalBytes * 100
-              )
+            ? Math.round(snapshot.bytesTransferred / snapshot.totalBytes * 100)
             : 0;
 
           showToast(
@@ -994,8 +1502,8 @@ async function uploadInlineFile(file, type) {
       button.disabled = false;
     });
 
-    if ($("#uploadImageInput")) $("#uploadImageInput").value = "";
-    if ($("#uploadVideoInput")) $("#uploadVideoInput").value = "";
+    if ($("#editorImageInput")) $("#editorImageInput").value = "";
+    if ($("#editorVideoInput")) $("#editorVideoInput").value = "";
   }
 }
 
@@ -1038,19 +1546,61 @@ function insertVideoLinkAtCursor() {
 }
 
 function removeInlineMedia(id) {
+  const removed = inlineMediaDraft.find(item => item.id === id);
   inlineMediaDraft = inlineMediaDraft.filter(item => item.id !== id);
 
   const field = $("#articleContent");
 
   if (field) {
-    field.value = field.value.replace(
-      new RegExp(`\\n?\\s*\\[\\[MEDIA:${id}\\]\\]\\s*`, "g"),
-      "\n\n"
-    );
+    const marker = `[[MEDIA:${id}]]`;
+
+    field.innerHTML = field.innerHTML
+      .replaceAll(marker, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 
   renderInlineMediaManager();
   updateInlinePreview();
+
+  if (removed?.storagePath) {
+    showToast(
+      "Mídia removida do texto. O arquivo armazenado não foi apagado automaticamente.",
+      5000
+    );
+  }
+}
+
+async function cleanupUnusedStorageMedia(previousMedia = [], nextMedia = []) {
+  const nextPaths = new Set(
+    (Array.isArray(nextMedia) ? nextMedia : [])
+      .map(item => item.storagePath)
+      .filter(Boolean)
+  );
+
+  const oldPaths = [
+    ...new Set(
+      (Array.isArray(previousMedia) ? previousMedia : [])
+        .map(item => item.storagePath)
+        .filter(Boolean)
+    )
+  ];
+
+  for (const path of oldPaths) {
+    if (nextPaths.has(path)) continue;
+
+    try {
+      await deleteObject(storageRef(storage, path));
+    } catch (error) {
+      if (error?.code !== "storage/object-not-found") {
+        console.warn(
+          "Não foi possível limpar mídia antiga:",
+          path,
+          error
+        );
+      }
+    }
+  }
 }
 
 /* SALVAMENTO DAS MATÉRIAS */
@@ -1063,7 +1613,7 @@ function articleFromForm(status, existingArticle = null) {
     category: $("#articleCategory").value,
     image: $("#articleImage").value.trim(),
     videoUrl: $("#articleVideoUrl")?.value.trim() || "",
-    content: $("#articleContent").value.trim(),
+    content: $("#articleContent").innerHTML.trim(),
 
     inlineMedia: inlineMediaDraft.map(item => ({
       id: item.id,
@@ -1091,7 +1641,6 @@ async function saveArticle(event, status) {
   if (!requireAdmin()) return;
 
   const form = $("#articleForm");
-
   if (!form.reportValidity()) return;
 
   const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
@@ -1128,6 +1677,11 @@ async function saveArticle(event, status) {
         payload
       );
 
+      await cleanupUnusedStorageMedia(
+        existingArticle?.inlineMedia || [],
+        payload.inlineMedia
+      );
+
       showToast(
         status === "published"
           ? "Matéria atualizada e publicada."
@@ -1141,30 +1695,22 @@ async function saveArticle(event, status) {
 
       showToast(
         status === "published"
-          ? "Matéria publicada."
-          : "Rascunho salvo."
+          ? "Matéria publicada com sucesso."
+          : "Rascunho salvo com sucesso."
       );
     }
 
     resetArticleForm();
-    setAdminTab(status === "draft" ? "review" : "manage");
   } catch (error) {
-    console.error("Erro ao salvar matéria no Firestore:", error);
-
-    showToast(
-      friendlyFirestoreError(error, "salvar a matéria"),
-      6000
-    );
+    console.error("Erro ao salvar matéria:", error);
+    showToast(friendlyFirestoreError(error, "salvar a matéria"), 6000);
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = currentArticleId
-        ? "Salvar alterações"
-        : "Publicar matéria";
+      button.textContent = "Publicar matéria";
     }
   }
 }
-
 function friendlyFirestoreError(error, action) {
   if (error?.code === "permission-denied") {
     return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
@@ -1225,7 +1771,6 @@ function adminItem(article, mode) {
 
 function renderReviewQueue() {
   const host = $("#reviewQueue");
-
   if (!host) return;
 
   const items = sortNewest(
@@ -1245,7 +1790,6 @@ function renderReviewQueue() {
 
 function renderPublishedManage() {
   const host = $("#publishedManage");
-
   if (!host) return;
 
   const items = sortNewest(
@@ -1280,6 +1824,7 @@ async function handleArticleAction(event) {
       }
 
       await deleteDoc(doc(db, "articles", id));
+      await cleanupUnusedStorageMedia(article.inlineMedia || [], []);
       showToast("Matéria excluída.");
     } else if (action === "publish") {
       const payload = {
@@ -1344,6 +1889,16 @@ function startPublicListener() {
 
       renderHome();
 
+      const directMatch = location.hash.match(/^#artigo\/(.+)$/);
+
+      if (directMatch) {
+        const directId = decodeURIComponent(directMatch[1]);
+
+        if (publicItems.some(article => article.id === directId)) {
+          openArticle(directId);
+        }
+      }
+
       if (isAdmin) {
         renderReviewQueue();
         renderPublishedManage();
@@ -1401,11 +1956,51 @@ function startAdminListener() {
   );
 }
 
+function updatePublicAccountButton(user) {
+  const actions = $(".topbar-actions");
+  if (!actions) return;
+
+  let button = $("#riftAccountBtn");
+
+  if (!user || user.uid === ADMIN_UID) {
+    button?.remove();
+    return;
+  }
+
+  if (!button) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.id = "riftAccountBtn";
+    button.className = "admin-btn";
+
+    button.addEventListener("click", async () => {
+      try {
+        await signOut(auth);
+        showToast("Você saiu da sua conta.");
+
+        if (location.hash.startsWith("#artigo/")) {
+          openArticle(decodeURIComponent(location.hash.slice(8)));
+        }
+      } catch (error) {
+        console.error("Erro ao sair da conta:", error);
+        showToast("Não foi possível sair da conta.");
+      }
+    });
+
+    actions.appendChild(button);
+  }
+
+  button.textContent = "Sair da conta";
+  button.title = user.displayName || user.email || "Conta de leitor";
+}
+
 /* BOTÃO LOGIN / PAINEL ADM */
 
 function setAdminState(user) {
   currentUser = user;
   isAdmin = Boolean(user && user.uid === ADMIN_UID);
+
+  updatePublicAccountButton(user);
 
   const adminButton = $("#adminBtn");
 
@@ -1429,7 +2024,7 @@ function setAdminState(user) {
       `;
   }
 
-  $("#logoutBtn")?.classList.toggle("hidden", !isAdmin);
+  $("#logoutBtn")?.classList.toggle("hidden", !user);
 
   if (isAdmin) {
     $("#adminPanel")?.classList.remove("hidden");
@@ -1451,17 +2046,112 @@ function setAdminState(user) {
 
     startPublicListener();
 
-    if (user) {
-      signOut(auth).catch(error => {
-        console.error("Erro ao encerrar sessão não autorizada:", error);
-      });
+    const match = location.hash.match(/^#artigo\/(.+)$/);
+
+    if (match) {
+      const articleId = decodeURIComponent(match[1]);
+
+      if (allArticles.some(article =>
+        article.id === articleId && article.status === "published"
+      )) {
+        openArticle(articleId);
+      }
     }
+  }
+}
+
+/* FERRAMENTAS DE FORMATAÇÃO DO EDITOR */
+
+function escapeEditorText(value) {
+  return String(value || "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+function rememberEditorSelection() {
+  saveEditorRange();
+}
+
+function applyEditorCommand(command) {
+  const editor = $("#articleContent");
+  if (!editor) return;
+
+  const range = restoreEditorRange();
+
+  if (!range) {
+    editor.focus({ preventScroll: true });
+    return;
+  }
+
+  const commands = {
+    bold: "bold",
+    italic: "italic",
+    underline: "underline",
+    strikeThrough: "strikeThrough",
+    insertUnorderedList: "insertUnorderedList",
+    insertOrderedList: "insertOrderedList"
+  };
+
+  try {
+    if (commands[command]) {
+      document.execCommand(commands[command], false, null);
+    } else if (["p", "h2", "h3", "blockquote"].includes(command)) {
+      const formats = {
+        p: "P",
+        h2: "H2",
+        h3: "H3",
+        blockquote: "BLOCKQUOTE"
+      };
+
+      document.execCommand("formatBlock", false, formats[command]);
+    } else if (command === "link") {
+      const raw = window.prompt(
+        "Cole o endereço completo do link (https://...):",
+        "https://"
+      );
+
+      if (!raw) return;
+
+      let url;
+
+      try {
+        url = new URL(raw.trim());
+
+        if (!["https:", "http:"].includes(url.protocol)) {
+          throw new Error("Protocolo inválido");
+        }
+      } catch {
+        showToast(
+          "Link inválido. Use um endereço que comece com https:// ou http://."
+        );
+        return;
+      }
+
+      document.execCommand("createLink", false, url.href);
+    } else {
+      return;
+    }
+
+    editor.focus({ preventScroll: true });
+    saveEditorRange();
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    updateInlinePreview();
+  } catch (error) {
+    console.error("Erro ao formatar o texto:", error);
+    showToast("Não foi possível aplicar essa formatação.");
   }
 }
 
 /* EVENTOS */
 
 function setupEvents() {
+  installFeedbackStyles();
+  ensureSocialLoginButtons();
+
   $("#adminBtn")?.addEventListener("click", () => {
     if (isAdmin && currentUser?.uid === ADMIN_UID) {
       $("#homeView")?.classList.toggle("hidden");
@@ -1508,7 +2198,7 @@ function setupEvents() {
         );
       } else {
         closeLogin();
-        showToast("Login realizado. Carregando painel editorial...");
+        showToast("Login realizado.");
       }
     } catch (error) {
       console.error("Erro no login Firebase:", error);
@@ -1556,25 +2246,108 @@ function setupEvents() {
 
   $("#cancelEditBtn")?.addEventListener("click", resetArticleForm);
 
-  $("#uploadImageBtn")?.addEventListener("click", () => {
-    $("#uploadImageInput")?.click();
+  const editorField = $("#articleContent");
+  const editorToolbar = document.querySelector(".editor-toolbar");
+
+  ["keyup", "mouseup", "input", "focus", "click", "touchend"].forEach(eventName => {
+    editorField?.addEventListener(eventName, () => {
+      saveEditorRange();
+
+      if (eventName === "input") {
+        updateInlinePreview();
+      }
+    });
   });
 
-  $("#uploadVideoBtn")?.addEventListener("click", () => {
-    $("#uploadVideoInput")?.click();
+  editorField?.addEventListener("paste", () => {
+    setTimeout(() => {
+      saveEditorRange();
+      updateInlinePreview();
+    }, 0);
   });
 
-  $("#uploadImageInput")?.addEventListener("change", event => {
-    uploadInlineFile(event.target.files?.[0], "image");
+  document.addEventListener("selectionchange", () => {
+    if (editorField && document.activeElement === editorField) {
+      saveEditorRange();
+    }
   });
 
-  $("#uploadVideoInput")?.addEventListener("change", event => {
-    uploadInlineFile(event.target.files?.[0], "video");
+  editorToolbar?.addEventListener("pointerdown", event => {
+    const control = event.target.closest(
+      "[data-command], #editorLinkBtn, #insertImageBtn, #insertVideoBtn"
+    );
+
+    if (!control) return;
+
+    saveEditorRange();
+
+    if (control.matches("[data-command], #editorLinkBtn")) {
+      event.preventDefault();
+    }
   });
 
-  $("#insertVideoLinkBtn")?.addEventListener("click", insertVideoLinkAtCursor);
+  editorToolbar?.addEventListener("click", event => {
+    const button = event.target.closest("[data-command]");
 
-  $("#articleContent")?.addEventListener("input", updateInlinePreview);
+    if (!button) return;
+
+    event.preventDefault();
+    applyEditorCommand(button.dataset.command);
+  });
+
+  $("#insertImageBtn")?.addEventListener("click", () => {
+    saveEditorRange();
+    $("#editorImageInput")?.click();
+  });
+
+  $("#insertVideoBtn")?.addEventListener("click", () => {
+    saveEditorRange();
+    $("#editorVideoInput")?.click();
+  });
+
+  $("#editorImageInput")?.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      uploadInlineFile(file, "image");
+    }
+
+    event.target.value = "";
+  });
+
+  $("#editorVideoInput")?.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      uploadInlineFile(file, "video");
+    }
+
+    event.target.value = "";
+  });
+
+  $("#editorBlockFormat")?.addEventListener("change", event => {
+    const format = event.target.value;
+
+    applyEditorCommand(format);
+    event.target.value = "p";
+  });
+
+  $("#editorTextColor")?.addEventListener("change", event => {
+    if (!editorField) return;
+
+    restoreEditorRange();
+    document.execCommand("foreColor", false, event.target.value);
+    saveEditorRange();
+
+    editorField.dispatchEvent(new Event("input", { bubbles: true }));
+    updateInlinePreview();
+  });
+
+  $("#editorLinkBtn")?.addEventListener("click", () => {
+    applyEditorCommand("link");
+  });
+
+  editorField?.addEventListener("input", updateInlinePreview);
 
   $("#inlineMediaList")?.addEventListener("click", event => {
     const button = event.target.closest("[data-remove-inline-media]");
