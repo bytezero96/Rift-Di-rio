@@ -1,0 +1,598 @@
+
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080d18">
+  <meta name="description" content="Rift Diário: notícias, atualizações, esports e guias de Wild Rift e League of Legends.">
+
+  <title>Rift Diário — Notícias de Wild Rift e LoL</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+
+  <style>
+    .brand-icon {
+      width: 48px;
+      height: 48px;
+      display: block;
+      flex-shrink: 0;
+      object-fit: contain;
+      background: transparent;
+      box-shadow: none;
+      clip-path: none;
+      border: none;
+      border-radius: 0;
+    }
+
+    .brand-icon::after {
+      content: none;
+    }
+
+    /* Rodapé */
+    .site-footer {
+      width: min(1180px, 92%);
+      margin: 0 auto;
+      padding: 25px 0 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-brand,
+    .footer-note {
+      line-height: 1.7;
+    }
+
+    .footer-developer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 9px;
+      font-size: 12px;
+    }
+
+    .footer-author {
+      color: var(--gold-soft);
+      font-weight: 800;
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .footer-author:hover {
+      color: #fff0b5;
+    }
+
+    .footer-socials {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 3px;
+    }
+
+    .footer-social-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 34px;
+      padding: 7px 10px;
+      color: #c4cfdf;
+      background: #111b2b;
+      border: 1px solid #304158;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+      transition:
+        color 0.2s ease,
+        border-color 0.2s ease,
+        background 0.2s ease,
+        transform 0.2s ease;
+    }
+
+    .footer-social-link svg {
+      width: 17px;
+      height: 17px;
+      flex-shrink: 0;
+    }
+
+    .footer-social-link:hover {
+      color: var(--gold-soft);
+      background: #f5bd3610;
+      border-color: var(--gold-border);
+      transform: translateY(-2px);
+    }
+
+    /* Link da Riot Games */
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 15px;
+      color: #e8edf7;
+      background: linear-gradient(135deg, #111d30, #0b1220);
+      border: 1px solid #39465b;
+      border-radius: 7px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      text-decoration: none;
+      text-transform: uppercase;
+      transition:
+        color 0.2s ease,
+        border-color 0.2s ease,
+        background 0.2s ease,
+        transform 0.2s ease;
+    }
+
+    .footer-link::after {
+      content: none !important;
+      display: none !important;
+    }
+
+    .footer-link:hover {
+      color: var(--gold-soft);
+      background: #f5bd360b;
+      border-color: var(--gold-border);
+      transform: translateY(-1px);
+    }
+
+    @media (max-width: 700px) {
+      .site-footer {
+        justify-content: center;
+        text-align: center;
+        gap: 14px;
+      }
+
+      .footer-brand,
+      .footer-note,
+      .footer-developer {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .footer-socials {
+        margin-left: 0;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .footer-developer {
+        gap: 8px;
+        font-size: 12px;
+      }
+
+      .footer-social-link {
+        padding: 7px 9px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Rift Diário início">
+      <img
+        class="brand-icon"
+        src="https://i.imgur.com/7M3kdL6.png"
+        alt="Logo Rift Diário"
+      >
+      <span>RIFT <b>DIÁRIO</b></span>
+    </a>
+
+    <nav class="main-nav" aria-label="Categorias">
+      <button class="nav-link active" data-category="all">Início</button>
+      <button class="nav-link" data-category="wild-rift">Wild Rift</button>
+      <button class="nav-link" data-category="lol-pc">LoL PC</button>
+      <button class="nav-link" data-category="esports">Esports</button>
+      <button class="nav-link" data-category="guias">Guias</button>
+    </nav>
+
+    <div class="topbar-actions">
+      <button class="icon-btn" id="searchToggle" aria-label="Abrir busca">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="10.8" cy="10.8" r="6.8"></circle>
+          <path d="m16 16 5 5"></path>
+        </svg>
+      </button>
+
+      <button class="admin-btn" id="adminBtn">Login</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="searchPanel" class="search-panel hidden" aria-label="Buscar notícias">
+      <label for="searchInput">Buscar notícias</label>
+
+      <div class="search-row">
+        <input
+          id="searchInput"
+          type="search"
+          placeholder="Digite um título, jogo ou assunto..."
+        >
+        <button class="secondary-btn" id="clearSearch">Limpar</button>
+      </div>
+    </section>
+
+    <section id="homeView" class="page-view">
+      <div class="hero-copy">
+        <div>
+          <span class="eyebrow">NOTÍCIAS • ATUALIZAÇÕES • ESPORTS</span>
+
+          <h1>
+            O universo competitivo<br>
+            <span>em um só lugar.</span>
+          </h1>
+
+          <p>
+            Acompanhe novidades, patches, campeonatos e análises
+            de Wild Rift e League of Legends PC.
+          </p>
+        </div>
+      </div>
+
+      <section
+        id="featuredSection"
+        class="featured-section"
+        aria-label="Notícia em destaque"
+      ></section>
+
+      <section class="news-section">
+        <div class="section-heading">
+          <div>
+            <span class="eyebrow">FIQUE POR DENTRO</span>
+            <h2 id="listingTitle">Últimas notícias</h2>
+          </div>
+
+          <span id="newsCount" class="counter">Carregando...</span>
+        </div>
+
+        <div id="newsGrid" class="news-grid">
+          <div class="loading-state">Carregando notícias...</div>
+        </div>
+
+        <button id="loadMoreBtn" class="secondary-btn load-more hidden">
+          Carregar mais notícias
+        </button>
+      </section>
+    </section>
+
+    <section
+      id="articleView"
+      class="article-view hidden"
+      aria-live="polite"
+    ></section>
+
+    <!-- Painel administrativo -->
+    <section id="adminPanel" class="admin-panel hidden">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">ÁREA RESTRITA</span>
+          <h2>Login</h2>
+          <p class="muted">
+            Gerencie matérias próprias e revise conteúdo importado.
+          </p>
+        </div>
+
+        <button id="logoutBtn" class="secondary-btn">Sair</button>
+      </div>
+
+      <div class="admin-tabs">
+        <button class="admin-tab active" data-admin-tab="editor">
+          Nova matéria
+        </button>
+
+        <button class="admin-tab" data-admin-tab="review">
+          Fila de revisão
+          <span id="reviewCount" class="tiny-count">0</span>
+        </button>
+
+        <button class="admin-tab" data-admin-tab="manage">
+          Publicadas
+        </button>
+      </div>
+
+      <div id="editorTab" class="admin-tab-panel">
+        <form id="articleForm" class="editor-form">
+          <input type="hidden" id="editingId">
+
+          <div class="form-grid">
+            <div class="field full">
+              <label for="articleTitle">Título *</label>
+              <input
+                id="articleTitle"
+                maxlength="140"
+                required
+                placeholder="Título da matéria"
+              >
+            </div>
+
+            <div class="field full">
+              <label for="articleSummary">Resumo *</label>
+              <textarea
+                id="articleSummary"
+                rows="3"
+                maxlength="300"
+                required
+                placeholder="Resumo curto para os cards e para os mecanismos de busca"
+              ></textarea>
+            </div>
+
+            <div class="field">
+              <label for="articleGame">Jogo *</label>
+              <select id="articleGame" required>
+                <option value="wild-rift">Wild Rift</option>
+                <option value="lol-pc">League of Legends</option>
+                <option value="both">Ambos</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="articleCategory">Categoria *</label>
+              <select id="articleCategory" required>
+                <option value="atualizacoes">Atualizações</option>
+                <option value="esports">Esports</option>
+                <option value="guias">Guias</option>
+                <option value="meta">Meta e balanceamento</option>
+                <option value="comunidade">Comunidade</option>
+              </select>
+            </div>
+
+            <div class="field full">
+              <label for="articleImage">URL da imagem (opcional)</label>
+              <input
+                id="articleImage"
+                type="url"
+                placeholder="https://exemplo.com/imagem.jpg"
+              >
+            </div>
+
+            <div class="field full">
+              <label for="articleContent">Matéria *</label>
+              <textarea
+                id="articleContent"
+                rows="10"
+                required
+                placeholder="Escreva o conteúdo da matéria. Separe parágrafos com linhas em branco."
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="editor-actions">
+            <button
+              class="primary-btn"
+              type="submit"
+              id="saveArticleBtn"
+            >
+              Publicar matéria
+            </button>
+
+            <button
+              class="secondary-btn"
+              type="button"
+              id="saveDraftBtn"
+            >
+              Salvar rascunho
+            </button>
+
+            <button
+              class="text-btn hidden"
+              type="button"
+              id="cancelEditBtn"
+            >
+              Cancelar edição
+            </button>
+          </div>
+
+          <p class="form-hint">
+            Matérias próprias são identificadas como conteúdo da redação.
+            Confira os direitos de uso das imagens antes de publicar.
+          </p>
+        </form>
+      </div>
+
+      <div id="reviewTab" class="admin-tab-panel hidden">
+        <div id="reviewQueue" class="admin-list">
+          <p class="empty-state">Carregando fila de revisão...</p>
+        </div>
+      </div>
+
+      <div id="manageTab" class="admin-tab-panel hidden">
+        <div id="publishedManage" class="admin-list">
+          <p class="empty-state">Carregando matérias...</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-brand">
+      Rift Diário — notícias, atualizações e esports.
+    </div>
+
+    <div class="footer-note">
+      © 2026 Rift Diário. Todos os direitos reservados.
+    </div>
+
+    <div class="footer-developer">
+      <span>Desenvolvido por</span>
+
+      <a
+        class="footer-author"
+        href="https://www.instagram.com/henrique_luzorio/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Henrique Luzório
+      </a>
+
+      <div class="footer-socials">
+        <a
+          href="https://www.instagram.com/henrique_luzorio/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="footer-social-link"
+          aria-label="Instagram de Henrique Luzório"
+          title="Instagram"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="5"></rect>
+            <circle cx="12" cy="12" r="4"></circle>
+            <circle cx="17.5" cy="6.5" r="0.8" fill="currentColor"></circle>
+          </svg>
+        </a>
+
+        <a
+          href="https://www.linkedin.com/in/henrique-loz%C3%B3rio-364695319/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="footer-social-link"
+          aria-label="LinkedIn de Henrique Luzório"
+          title="LinkedIn"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M5.2 3a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4ZM3.4 9h3.6v12H3.4V9Zm5.8 0h3.5v1.6h.1A3.8 3.8 0 0 1 16.2 8c3.7 0 4.4 2.4 4.4 5.5V21H17v-6.7c0-1.6 0-3.6-2.2-3.6s-2.5 1.7-2.5 3.5V21H9.2V9Z"></path>
+          </svg>
+        </a>
+      </div>
+    </div>
+
+    <a
+      class="footer-link"
+      href="https://www.riotgames.com/pt-br"
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="Visitar o site oficial da Riot Games"
+    >
+      Riot Games
+    </a>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Login profissional -->
+  <div id="loginOverlay" class="login-overlay hidden">
+    <div
+      class="login-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="loginTitle"
+      aria-describedby="loginDescription"
+    >
+      <button
+        id="closeLoginBtn"
+        class="login-close"
+        type="button"
+        aria-label="Fechar janela de login"
+      >×</button>
+
+      <div class="login-brand">
+        <img
+          class="login-logo"
+          src="https://i.imgur.com/7M3kdL6.png"
+          alt="Logo Rift Diário"
+        >
+
+        <div class="login-brand-name">
+          RIFT <strong>DIÁRIO</strong>
+        </div>
+
+        <span class="login-brand-caption">
+          CENTRAL DE ADMINISTRAÇÃO
+        </span>
+      </div>
+
+      <div class="login-divider"></div>
+
+      <div class="login-heading">
+        <span class="login-kicker">ACESSO RESTRITO</span>
+
+        <h2 id="loginTitle">Bem-vindo de volta</h2>
+
+        <p id="loginDescription">
+          Entre com sua conta autorizada para acessar o painel
+          administrativo do Rift Diário.
+        </p>
+      </div>
+
+      <form id="loginForm" class="login-form">
+        <div class="login-field">
+          <label for="adminEmail">E-mail de acesso</label>
+
+          <input
+            id="adminEmail"
+            name="email"
+            type="email"
+            placeholder="seuemail@exemplo.com"
+            autocomplete="username"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          >
+
+          <span class="login-field-hint">
+            Utilize o e-mail cadastrado para administração.
+          </span>
+        </div>
+
+        <div class="login-field">
+          <label for="adminPassword">Senha</label>
+
+          <input
+            id="adminPassword"
+            name="password"
+            type="password"
+            placeholder="Digite sua senha"
+            autocomplete="current-password"
+            required
+          >
+
+          <span class="login-field-hint">
+            Digite a senha da sua conta administrativa.
+          </span>
+        </div>
+
+        <button
+          class="primary-btn login-submit"
+          id="loginSubmitBtn"
+          type="submit"
+        >
+          Entrar no painel
+        </button>
+
+        <p
+          id="loginError"
+          class="login-error"
+          aria-live="polite"
+          role="status"
+        ></p>
+      </form>
+
+      <div class="login-footer">
+        <span class="login-security-dot"></span>
+        <span>Acesso exclusivo para administradores autorizados</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
