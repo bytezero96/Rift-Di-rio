@@ -25,7 +25,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
 /* =========================================================
-   RIFT DIÁRIO — CONFIGURAÇÃO
+   RIFT DIÁRIO — CONFIGURAÇÃO ORIGINAL DO FIREBASE
 ========================================================= */
 
 const firebaseConfig = {
@@ -47,7 +47,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
-
 const articlesRef = collection(db, "articles");
 
 let currentUser = null;
@@ -62,6 +61,7 @@ let uploadInProgress = false;
 let unsubscribePublic = null;
 let unsubscribeAdmin = null;
 let toastTimer = null;
+let publicListenerStarted = false;
 
 const PAGE_SIZE = 9;
 let shownCount = PAGE_SIZE;
@@ -145,18 +145,24 @@ function categoryLabel(category) {
 }
 
 function articleDate(article) {
-  return article.publishedAt || article.updatedAt || article.createdAt || null;
+  return article.publishedAt ||
+    article.updatedAt ||
+    article.createdAt ||
+    null;
 }
 
 function sortNewest(list) {
   return [...list].sort((a, b) => {
-    const dateA = articleDate(a)?.toDate
-      ? articleDate(a).toDate().getTime()
-      : new Date(articleDate(a) || 0).getTime();
+    const valueA = articleDate(a);
+    const valueB = articleDate(b);
 
-    const dateB = articleDate(b)?.toDate
-      ? articleDate(b).toDate().getTime()
-      : new Date(articleDate(b) || 0).getTime();
+    const dateA = valueA?.toDate
+      ? valueA.toDate().getTime()
+      : new Date(valueA || 0).getTime();
+
+    const dateB = valueB?.toDate
+      ? valueB.toDate().getTime()
+      : new Date(valueB || 0).getTime();
 
     return dateB - dateA;
   });
@@ -171,6 +177,160 @@ function normalized(value) {
 }
 
 /* =========================================================
+   CORREÇÃO: SANITIZAÇÃO E RENDERIZAÇÃO DO HTML DAS MATÉRIAS
+========================================================= */
+
+function sanitizeArticleHTML(html) {
+  const parsed = new DOMParser().parseFromString(
+    String(html ?? ""),
+    "text/html"
+  );
+
+  const allowedTags = new Set([
+    "P", "BR", "STRONG", "B", "EM", "I", "U", "S",
+    "H2", "H3", "H4", "UL", "OL", "LI", "BLOCKQUOTE",
+    "A", "IMG", "FIGURE", "FIGCAPTION",
+    "TABLE", "THEAD", "TBODY", "TR", "TH", "TD",
+    "HR", "CODE", "PRE"
+  ]);
+
+  const allowedAttributes = new Set([
+    "href", "src", "alt", "title", "target", "rel",
+    "width", "height", "loading"
+  ]);
+
+  function safeUrl(value, isImage = false) {
+    const raw = String(value || "").trim();
+
+    if (!raw) return "";
+
+    if (
+      isImage &&
+      /^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)
+    ) {
+      return raw;
+    }
+
+    try {
+      const url = new URL(raw, window.location.href);
+
+      if (url.protocol === "https:" || url.protocol === "http:") {
+        return url.href;
+      }
+    } catch {
+      // URL inválida.
+    }
+
+    return "";
+  }
+
+  function cleanNode(parent) {
+    for (const node of [...parent.childNodes]) {
+      if (node.nodeType === Node.COMMENT_NODE) {
+        node.remove();
+        continue;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        continue;
+      }
+
+      const tag = node.tagName;
+
+      if ([
+        "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED",
+        "FORM", "INPUT", "BUTTON", "SVG", "MATH"
+      ].includes(tag)) {
+        node.remove();
+        continue;
+      }
+
+      if (!allowedTags.has(tag)) {
+        cleanNode(node);
+        node.replaceWith(...node.childNodes);
+        continue;
+      }
+
+      for (const attribute of [...node.attributes]) {
+        const name = attribute.name.toLowerCase();
+
+        if (!allowedAttributes.has(name)) {
+          node.removeAttribute(attribute.name);
+          continue;
+        }
+
+        if (name === "href") {
+          const url = safeUrl(attribute.value);
+
+          if (url) {
+            node.setAttribute("href", url);
+          } else {
+            node.removeAttribute("href");
+          }
+        }
+
+        if (name === "src") {
+          const url = safeUrl(
+            attribute.value,
+            tag === "IMG"
+          );
+
+          if (url) {
+            node.setAttribute("src", url);
+          } else {
+            node.removeAttribute("src");
+          }
+        }
+      }
+
+      if (
+        tag === "A" &&
+        node.getAttribute("target") === "_blank"
+      ) {
+        node.setAttribute("rel", "noopener noreferrer");
+      }
+
+      if (tag === "IMG") {
+        node.setAttribute("loading", "lazy");
+      }
+
+      cleanNode(node);
+    }
+  }
+
+  cleanNode(parsed.body);
+
+  return parsed.body.innerHTML;
+}
+
+function renderContentSegment(value) {
+  const text = String(value || "").trim();
+
+  if (!text) return "";
+
+  const containsHTML =
+    /<(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code)\b[^>]*>/i
+      .test(text);
+
+  // Conteúdo antigo salvo em HTML: renderiza as tags permitidas.
+  if (containsHTML) {
+    return sanitizeArticleHTML(text);
+  }
+
+  // Texto simples: transforma parágrafos e quebras de linha em HTML.
+  return text
+    .split(/\n\s*\n/)
+    .map(paragraph => {
+      const clean = paragraph.trim();
+
+      return clean
+        ? `<p>${escapeHTML(clean).replace(/\n/g, "<br>")}</p>`
+        : "";
+    })
+    .join("");
+}
+
+/* =========================================================
    CARTÕES E PÁGINA INICIAL
 ========================================================= */
 
@@ -182,6 +342,7 @@ function articleCard(article) {
   return `
     <article class="news-card">
       ${image}
+
       <div class="news-card-copy">
         <span class="tag">
           ${escapeHTML(categoryLabel(article.category))}
@@ -392,7 +553,10 @@ function buildVideoEmbed(rawUrl) {
       id = pathParts[0] || "";
     } else if (pathParts[0] === "video") {
       id = (pathParts[1] || "").split("_")[0];
-    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
+    } else if (
+      pathParts[0] === "embed" &&
+      pathParts[1] === "video"
+    ) {
       id = pathParts[2] || "";
     }
 
@@ -420,8 +584,10 @@ function buildVideoEmbed(rawUrl) {
       src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
     } else if (
       pathParts[0] &&
-      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"]
-        .includes(pathParts[0].toLowerCase())
+      ![
+        "directory", "downloads", "jobs", "p",
+        "search", "settings", "turbo"
+      ].includes(pathParts[0].toLowerCase())
     ) {
       src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
     } else {
@@ -444,7 +610,7 @@ function buildVideoEmbed(rawUrl) {
   }
 
   // Arquivos de vídeo diretos
-  else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
+  else if (/\.(mp4|webm|ogv|ogg|mov)$/i.test(url.pathname)) {
     return `
       <div class="article-video">
         <video controls playsinline preload="metadata">
@@ -477,31 +643,22 @@ function buildVideoEmbed(rawUrl) {
 
 function renderArticleBody(content, media = []) {
   const byId = new Map(
-    (Array.isArray(media) ? media : []).map(item => [item.id, item])
+    (Array.isArray(media) ? media : [])
+      .filter(item => item && item.id)
+      .map(item => [item.id, item])
   );
 
-  const textHTML = value =>
-    String(value || "")
-      .split(/\n\s*\n/)
-      .map(paragraph => {
-        const clean = paragraph.trim();
-
-        return clean
-          ? `<p>${escapeHTML(clean).replace(/\n/g, "<br>")}</p>`
-          : "";
-      })
-      .join("");
-
   const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
+  const source = String(content || "");
 
   let html = "";
   let cursor = 0;
   let match;
 
-  const source = String(content || "");
-
   while ((match = markerPattern.exec(source)) !== null) {
-    html += textHTML(source.slice(cursor, match.index));
+    html += renderContentSegment(
+      source.slice(cursor, match.index)
+    );
 
     const item = byId.get(match[1]);
 
@@ -547,7 +704,7 @@ function renderArticleBody(content, media = []) {
     cursor = markerPattern.lastIndex;
   }
 
-  html += textHTML(source.slice(cursor));
+  html += renderContentSegment(source.slice(cursor));
 
   return html;
 }
@@ -575,13 +732,14 @@ function openArticle(id) {
 
   view.classList.remove("hidden");
 
-  const inlineBody =
-    Array.isArray(article.inlineMedia) && article.inlineMedia.length
-      ? renderArticleBody(article.content || "", article.inlineMedia)
-      : escapeHTML(article.content || "")
-          .split(/\n\s*\n/)
-          .map(paragraph => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
-          .join("");
+  // Sempre usa o renderizador, mesmo quando não existem mídias.
+  // Isso corrige o HTML antigo aparecendo como texto na matéria.
+  const inlineBody = renderArticleBody(
+    article.content || "",
+    Array.isArray(article.inlineMedia)
+      ? article.inlineMedia
+      : []
+  );
 
   view.innerHTML = `
     <a href="#inicio" class="back-link" data-home>
@@ -595,7 +753,10 @@ function openArticle(id) {
       </span>
 
       <h1>${escapeHTML(article.title)}</h1>
-      <p class="article-summary">${escapeHTML(article.summary)}</p>
+
+      <p class="article-summary">
+        ${escapeHTML(article.summary)}
+      </p>
 
       <div class="meta">
         ${escapeHTML(formatDate(articleDate(article)))}
@@ -619,8 +780,16 @@ function openArticle(id) {
     </p>
   `;
 
-  history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  history.replaceState(
+    null,
+    "",
+    `#artigo/${encodeURIComponent(id)}`
+  );
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
 
 function goHome() {
@@ -632,7 +801,11 @@ function goHome() {
   }
 
   history.replaceState(null, "", "#inicio");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
 
 /* =========================================================
@@ -749,7 +922,8 @@ function fillEditor(id) {
   $("#articleImage").value = article.image || "";
 
   if ($("#articleVideoUrl")) {
-    $("#articleVideoUrl").value = article.videoUrl || article.video || "";
+    $("#articleVideoUrl").value =
+      article.videoUrl || article.video || "";
   }
 
   $("#articleContent").value = article.content || "";
@@ -901,6 +1075,7 @@ async function uploadInlineFile(file, type) {
   ].filter(Boolean);
 
   uploadInProgress = true;
+
   buttons.forEach(button => {
     button.disabled = true;
   });
@@ -939,7 +1114,10 @@ async function uploadInlineFile(file, type) {
       `${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`
     );
   } catch (error) {
-    console.error("Erro ao enviar mídia para o Firebase Storage:", error);
+    console.error(
+      "Erro ao enviar mídia para o Firebase Storage:",
+      error
+    );
 
     showToast(
       friendlyFirestoreError(
@@ -1011,8 +1189,10 @@ function removeInlineMedia(id) {
   const field = $("#articleContent");
 
   if (field) {
+    const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     field.value = field.value.replace(
-      new RegExp(`\\n?\\s*\\[\\[MEDIA:${id}\\]\\]\\s*`, "g"),
+      new RegExp(`\\n?\\s*\\[\\[MEDIA:${escapedId}\\]\\]\\s*`, "g"),
       "\n\n"
     );
   }
@@ -1060,7 +1240,7 @@ async function saveArticle(event, status) {
 
   const form = $("#articleForm");
 
-  if (!form.reportValidity()) return;
+  if (!form || !form.reportValidity()) return;
 
   const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
 
@@ -1077,6 +1257,7 @@ async function saveArticle(event, status) {
     return;
   }
 
+  const editingId = currentArticleId;
   const payload = articleFromForm(status);
   const button = $("#saveArticleBtn");
 
@@ -1086,9 +1267,9 @@ async function saveArticle(event, status) {
   }
 
   try {
-    if (currentArticleId) {
+    if (editingId) {
       await updateDoc(
-        doc(db, "articles", currentArticleId),
+        doc(db, "articles", editingId),
         payload
       );
 
@@ -1310,9 +1491,6 @@ async function handleArticleAction(event) {
    FIRESTORE — CARREGAMENTO PÚBLICO E ADMINISTRATIVO
 ========================================================= */
 
-// Visitantes consultam apenas artigos publicados.
-// A condição status == "published" é necessária para corresponder
-// às permissões de leitura pública configuradas no Firestore.
 function startPublicListener() {
   if (unsubscribePublic) {
     unsubscribePublic();
@@ -1332,8 +1510,12 @@ function startPublicListener() {
       }));
 
       if (isAdmin) {
+        const unpublishedItems = allArticles.filter(
+          article => article.status !== "published"
+        );
+
         allArticles = [
-          ...allArticles.filter(article => article.status !== "published"),
+          ...unpublishedItems,
           ...publicItems
         ];
 
@@ -1380,10 +1562,10 @@ function startPublicListener() {
       );
     }
   );
+
+  publicListenerStarted = true;
 }
 
-// Somente o administrador autorizado consulta a coleção inteira,
-// incluindo rascunhos e matérias em revisão.
 function startAdminListener() {
   if (unsubscribeAdmin) {
     unsubscribeAdmin();
@@ -1392,12 +1574,10 @@ function startAdminListener() {
   unsubscribeAdmin = onSnapshot(
     articlesRef,
     snapshot => {
-      const adminItems = snapshot.docs.map(item => ({
+      allArticles = snapshot.docs.map(item => ({
         id: item.id,
         ...item.data()
       }));
-
-      allArticles = adminItems;
 
       renderHome();
       renderReviewQueue();
@@ -1443,6 +1623,8 @@ function setAdminState(user) {
       unsubscribePublic = null;
     }
 
+    publicListenerStarted = false;
+
     if (unsubscribeAdmin) {
       unsubscribeAdmin();
       unsubscribeAdmin = null;
@@ -1457,9 +1639,11 @@ function setAdminState(user) {
       unsubscribeAdmin = null;
     }
 
-    startPublicListener();
+    if (!publicListenerStarted || !unsubscribePublic) {
+      startPublicListener();
+    }
 
-    // Contas diferentes da conta administrativa não permanecem conectadas.
+    // Uma conta que não seja a administradora é desconectada.
     if (user) {
       signOut(auth).catch(error => {
         console.error(
@@ -1502,6 +1686,11 @@ function setupEvents() {
     const email = $("#adminEmail")?.value.trim();
     const password = $("#adminPassword")?.value;
     const button = $("#loginSubmitBtn");
+
+    if (!email || !password) {
+      setLoginError("Informe o e-mail e a senha.");
+      return;
+    }
 
     if (button) {
       button.disabled = true;
@@ -1575,7 +1764,10 @@ function setupEvents() {
     saveArticle(null, "draft");
   });
 
-  $("#cancelEditBtn")?.addEventListener("click", resetArticleForm);
+  $("#cancelEditBtn")?.addEventListener(
+    "click",
+    resetArticleForm
+  );
 
   $("#uploadImageBtn")?.addEventListener("click", () => {
     $("#uploadImageInput")?.click();
@@ -1604,7 +1796,9 @@ function setupEvents() {
   );
 
   $("#inlineMediaList")?.addEventListener("click", event => {
-    const button = event.target.closest("[data-remove-inline-media]");
+    const button = event.target.closest(
+      "[data-remove-inline-media]"
+    );
 
     if (button) {
       removeInlineMedia(button.dataset.removeInlineMedia);
@@ -1706,9 +1900,6 @@ function setupEvents() {
 function initialize() {
   setupEvents();
 
-  // A leitura pública é iniciada independentemente do login.
-  startPublicListener();
-
   onAuthStateChanged(
     auth,
     user => setAdminState(user),
@@ -1734,21 +1925,12 @@ function initialize() {
   }
 }
 
-try {
-  if (document.readyState === "loading") {
-    document.addEventListener(
-      "DOMContentLoaded",
-      initialize,
-      { once: true }
-    );
-  } else {
-    initialize();
-  }
-} catch (error) {
-  console.error("Falha ao iniciar o Rift Diário:", error);
-
-  showToast(
-    "O site encontrou um erro ao iniciar. Abra o Console para ver os detalhes.",
-    6000
+if (document.readyState === "loading") {
+  document.addEventListener(
+    "DOMContentLoaded",
+    initialize,
+    { once: true }
   );
+} else {
+  initialize();
 }
