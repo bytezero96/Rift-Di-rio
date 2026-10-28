@@ -1,37 +1,32 @@
-
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
 import {
   getAuth,
   signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-
+  onAuthStateChanged,
+  signOut
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
 import {
   getFirestore,
   collection,
-  addDoc,
-  getDocs,
-  deleteDoc,
   doc,
+  addDoc,
   updateDoc,
+  deleteDoc,
+  onSnapshot,
   query,
-  orderBy,
+  where,
   serverTimestamp
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 import {
   getStorage,
-  ref,
+  ref as storageRef,
   uploadBytes,
   getDownloadURL
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
-/* =========================================
-   CONFIGURAÇÃO FIREBASE
-   MANTIDA CONFORME O CÓDIGO ORIGINAL
-========================================= */
+/* =========================================================
+   RIFT DIÁRIO — CONFIGURAÇÃO
+========================================================= */
 
 const firebaseConfig = {
   apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
@@ -45,181 +40,81 @@ const firebaseConfig = {
 
 const ADMIN_UID = "U7ohORMjr1O9Ubby2WFMztAe8Au2";
 
-/* =========================================
-   INICIALIZAÇÃO
-========================================= */
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-const articlesCollection = collection(db, "articles");
+const articlesRef = collection(db, "articles");
 
 let currentUser = null;
 let isAdmin = false;
-
 let allArticles = [];
 let visibleArticles = [];
-let currentCategory = "all";
-let currentSearch = "";
+let activeCategory = "all";
+let activeAdminTab = "editor";
 let currentArticleId = null;
-let editingArticle = null;
-let newsLimit = 9;
-let currentAdminTab = "editor";
-let savedEditorRange = null;
+let inlineMediaDraft = [];
+let uploadInProgress = false;
+let unsubscribePublic = null;
+let unsubscribeAdmin = null;
 let toastTimer = null;
 
-/* =========================================
-   ELEMENTOS
-========================================= */
+const PAGE_SIZE = 9;
+let shownCount = PAGE_SIZE;
 
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => Array.from(
-  document.querySelectorAll(selector)
-);
+/* =========================================================
+   FUNÇÕES AUXILIARES
+========================================================= */
 
-const adminBtn = $("#adminBtn");
-const loginOverlay = $("#loginOverlay");
-const loginForm = $("#loginForm");
-const loginTitle = $("#loginTitle");
-const loginError = $("#loginError");
-const loginSubmitBtn = $("#loginSubmitBtn");
+function escapeHTML(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  })[character]);
+}
 
-const adminPanel = $("#adminPanel");
-const logoutBtn = $("#logoutBtn");
+function showToast(message, duration = 3500) {
+  const toast = $("#toast");
 
-const articleForm = $("#articleForm");
-const articleTitle = $("#articleTitle");
-const articleSummary = $("#articleSummary");
-const articleGame = $("#articleGame");
-const articleCategory = $("#articleCategory");
-const articleImage = $("#articleImage");
-const articleContent = $("#articleContent");
-
-const saveArticleBtn = $("#saveArticleBtn");
-const saveDraftBtn = $("#saveDraftBtn");
-const cancelEditBtn = $("#cancelEditBtn");
-
-const editorImageInput = $("#editorImageInput");
-const editorVideoInput = $("#editorVideoInput");
-const insertImageBtn = $("#insertImageBtn");
-const insertVideoBtn = $("#insertVideoBtn");
-
-const editorBlockFormat = $("#editorBlockFormat");
-const editorTextColor = $("#editorTextColor");
-const editorLinkBtn = $("#editorLinkBtn");
-
-const homeView = $("#homeView");
-const articleView = $("#articleView");
-const featuredSection = $("#featuredSection");
-const newsGrid = $("#newsGrid");
-const newsCount = $("#newsCount");
-const listingTitle = $("#listingTitle");
-const loadMoreBtn = $("#loadMoreBtn");
-
-const searchToggle = $("#searchToggle");
-const searchPanel = $("#searchPanel");
-const searchInput = $("#searchInput");
-const clearSearch = $("#clearSearch");
-
-const reviewQueue = $("#reviewQueue");
-const reviewCount = $("#reviewCount");
-const publishedManage = $("#publishedManage");
-const toast = $("#toast");
-
-/* =========================================
-   MENSAGENS
-========================================= */
-
-function showMessage(message, type = "error") {
   if (!toast) {
-    console[type === "error" ? "error" : "log"](message);
+    console.log(message);
     return;
   }
 
   toast.textContent = message;
-  toast.classList.remove("hidden");
-
-  toast.style.borderColor =
-    type === "success" ? "#348c68" :
-    type === "warning" ? "#a47b28" :
-    "#8d4252";
-
-  toast.style.background =
-    type === "success" ? "#103626" :
-    type === "warning" ? "#352b14" :
-    "#32151e";
+  toast.classList.add("show");
 
   clearTimeout(toastTimer);
 
   toastTimer = setTimeout(() => {
-    toast.classList.add("hidden");
-  }, 4500);
+    toast.classList.remove("show");
+  }, duration);
 }
 
-/* =========================================
-   UTILITÁRIOS
-========================================= */
+function setLoginError(message = "") {
+  const element = $("#loginError");
 
-function escapeHTML(value = "") {
-  return String(value).replace(/[&<>"']/g, (character) => {
-    const entities = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    };
-
-    return entities[character];
-  });
-}
-
-function normalizeText(value = "") {
-  return String(value)
-    .trim()
-    .toLocaleLowerCase("pt-BR")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function safeURL(value = "") {
-  try {
-    const url = new URL(value, window.location.href);
-
-    if (
-      url.protocol === "https:" ||
-      url.protocol === "http:"
-    ) {
-      return url.href;
-    }
-
-    return "";
-  } catch {
-    return "";
+  if (element) {
+    element.textContent = message;
   }
 }
 
-function getArticleDate(article) {
-  const timestamp = article.updatedAt || article.createdAt;
+function formatDate(value) {
+  const date = value?.toDate
+    ? value.toDate()
+    : value
+      ? new Date(value)
+      : null;
 
-  if (timestamp?.toDate) {
-    return timestamp.toDate();
-  }
-
-  if (timestamp instanceof Date) {
-    return timestamp;
-  }
-
-  return null;
-}
-
-function formatDate(article) {
-  const date = getArticleDate(article);
-
-  if (!date) {
-    return "Publicação recente";
+  if (!date || Number.isNaN(date.getTime())) {
+    return "Data não informada";
   }
 
   return new Intl.DateTimeFormat("pt-BR", {
@@ -230,17 +125,15 @@ function formatDate(article) {
 }
 
 function gameLabel(game) {
-  const labels = {
+  return ({
     "wild-rift": "Wild Rift",
-    "lol-pc": "League of Legends",
-    both: "Wild Rift e LoL"
-  };
-
-  return labels[game] || "Games";
+    "lol-pc": "League of Legends PC",
+    both: "Wild Rift + LoL PC"
+  })[game] || "Games";
 }
 
 function categoryLabel(category) {
-  const labels = {
+  return ({
     atualizacoes: "Atualizações",
     esports: "Esports",
     guias: "Guias",
@@ -248,1590 +141,1614 @@ function categoryLabel(category) {
     comunidade: "Comunidade",
     "wild-rift": "Wild Rift",
     "lol-pc": "LoL PC"
-  };
-
-  return labels[category] || category || "Notícias";
+  })[category] || category || "Notícias";
 }
 
-function articleImageURL(article) {
-  return safeURL(article.image || "");
+function articleDate(article) {
+  return article.publishedAt || article.updatedAt || article.createdAt || null;
 }
 
-function setButtonLoading(button, loading, loadingText = "Salvando...") {
-  if (!button) return;
+function sortNewest(list) {
+  return [...list].sort((a, b) => {
+    const dateA = articleDate(a)?.toDate
+      ? articleDate(a).toDate().getTime()
+      : new Date(articleDate(a) || 0).getTime();
 
-  if (loading) {
-    button.dataset.originalText = button.textContent;
-    button.textContent = loadingText;
-    button.disabled = true;
-  } else {
-    button.textContent =
-      button.dataset.originalText || button.textContent;
+    const dateB = articleDate(b)?.toDate
+      ? articleDate(b).toDate().getTime()
+      : new Date(articleDate(b) || 0).getTime();
 
-    button.disabled = false;
-  }
-}
-
-/* =========================================
-   LOGIN
-========================================= */
-
-function openLogin() {
-  if (!loginOverlay) return;
-
-  loginOverlay.classList.remove("hidden");
-  loginOverlay.setAttribute("aria-hidden", "false");
-
-  if (loginTitle) {
-    loginTitle.textContent = "Entrar no painel";
-  }
-
-  if (loginError) {
-    loginError.textContent = "";
-  }
-
-  $("#adminEmail")?.focus();
-}
-
-function closeLogin() {
-  if (!loginOverlay) return;
-
-  loginOverlay.classList.add("hidden");
-  loginOverlay.setAttribute("aria-hidden", "true");
-}
-
-$("#closeLoginBtn")?.addEventListener("click", closeLogin);
-
-loginOverlay?.addEventListener("click", (event) => {
-  if (event.target === loginOverlay) {
-    closeLogin();
-  }
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeLogin();
-  }
-});
-
-adminBtn?.addEventListener("click", () => {
-  if (isAdmin) {
-    adminPanel?.classList.toggle("hidden");
-
-    if (!adminPanel?.classList.contains("hidden")) {
-      adminPanel.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
-    }
-
-    return;
-  }
-
-  openLogin();
-});
-
-loginForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  const email = $("#adminEmail")?.value.trim();
-  const password = $("#adminPassword")?.value;
-
-  if (!email || !password) {
-    if (loginError) {
-      loginError.textContent = "Digite seu e-mail e sua senha.";
-    }
-
-    return;
-  }
-
-  if (loginError) {
-    loginError.textContent = "";
-  }
-
-  setButtonLoading(loginSubmitBtn, true, "Entrando...");
-
-  try {
-    const credential = await signInWithEmailAndPassword(
-      auth,
-      email,
-      password
-    );
-
-    if (credential.user.uid !== ADMIN_UID) {
-      await signOut(auth);
-
-      throw new Error(
-        "Esta conta não tem permissão de administrador."
-      );
-    }
-
-    loginForm.reset();
-    closeLogin();
-
-    showMessage("Login realizado com sucesso!", "success");
-
-    adminPanel?.classList.remove("hidden");
-    adminPanel?.scrollIntoView({
-      behavior: "smooth",
-      block: "start"
-    });
-  } catch (error) {
-    console.error("Erro no login:", error);
-
-    const messages = {
-      "auth/invalid-credential": "E-mail ou senha incorretos.",
-      "auth/invalid-email": "O e-mail informado é inválido.",
-      "auth/user-not-found": "Usuário não encontrado.",
-      "auth/wrong-password": "Senha incorreta.",
-      "auth/too-many-requests":
-        "Muitas tentativas. Aguarde e tente novamente.",
-      "auth/operation-not-allowed":
-        "O login por e-mail e senha não está habilitado no Firebase.",
-      "auth/network-request-failed":
-        "Falha de conexão. Verifique sua internet."
-    };
-
-    const message =
-      messages[error.code] ||
-      error.message ||
-      "Não foi possível entrar. Confira os dados e tente novamente.";
-
-    if (loginError) {
-      loginError.textContent = message;
-    } else {
-      showMessage(message);
-    }
-  } finally {
-    setButtonLoading(loginSubmitBtn, false);
-  }
-});
-
-/* =========================================
-   ESTADO DO ADMINISTRADOR
-========================================= */
-
-function setAdminState(user) {
-  currentUser = user;
-  isAdmin = Boolean(user && user.uid === ADMIN_UID);
-
-  if (adminBtn) {
-    adminBtn.textContent = isAdmin ? "Painel ADM" : "Login";
-
-    adminBtn.setAttribute(
-      "aria-label",
-      isAdmin ? "Abrir painel administrativo" : "Fazer login"
-    );
-  }
-
-  logoutBtn?.classList.toggle("hidden", !isAdmin);
-  adminPanel?.classList.toggle("hidden", !isAdmin);
-
-  if (!isAdmin) {
-    closeLogin();
-  }
-}
-
-onAuthStateChanged(auth, async (user) => {
-  if (user && user.uid !== ADMIN_UID) {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("Erro ao encerrar sessão:", error);
-    }
-
-    setAdminState(null);
-    return;
-  }
-
-  setAdminState(user);
-
-  if (user && isAdmin) {
-    await loadArticles();
-  }
-});
-
-logoutBtn?.addEventListener("click", async () => {
-  try {
-    await signOut(auth);
-    resetEditor();
-    showMessage("Você saiu da sua conta.", "success");
-  } catch (error) {
-    console.error("Erro ao sair:", error);
-    showMessage("Não foi possível sair da conta.");
-  }
-});
-
-/* =========================================
-   CARREGAMENTO DAS MATÉRIAS
-========================================= */
-
-async function loadArticles() {
-  if (newsGrid) {
-    newsGrid.innerHTML =
-      '<div class="loading-state">Carregando notícias...</div>';
-  }
-
-  try {
-    const articlesQuery = query(
-      articlesCollection,
-      orderBy("createdAt", "desc")
-    );
-
-    const snapshot = await getDocs(articlesQuery);
-
-    allArticles = snapshot.docs.map((item) => ({
-      id: item.id,
-      ...item.data()
-    }));
-
-    renderNews();
-    renderAdminLists();
-  } catch (error) {
-    console.error("Erro ao carregar matérias:", error);
-
-    if (newsGrid) {
-      newsGrid.innerHTML = `
-        <div class="empty-state">
-          Não foi possível carregar as notícias.
-          Verifique as regras do Firestore e sua conexão.
-        </div>
-      `;
-    }
-
-    showMessage(
-      "Erro ao carregar notícias. Verifique as permissões do Firestore."
-    );
-  }
-}
-
-/* =========================================
-   FILTROS E BUSCA
-========================================= */
-
-function getPublishedArticles() {
-  return allArticles.filter(
-    (article) => article.status === "published"
-  );
-}
-
-function filterArticles() {
-  const published = getPublishedArticles();
-
-  return published.filter((article) => {
-    const matchesCategory =
-      currentCategory === "all" ||
-      article.game === currentCategory ||
-      article.category === currentCategory ||
-      (
-        currentCategory === "esports" &&
-        article.category === "esports"
-      ) ||
-      (
-        currentCategory === "guias" &&
-        article.category === "guias"
-      );
-
-    const searchableText = normalizeText([
-      article.title,
-      article.summary,
-      article.game,
-      article.category,
-      article.content
-    ].join(" "));
-
-    const matchesSearch =
-      !currentSearch ||
-      searchableText.includes(normalizeText(currentSearch));
-
-    return matchesCategory && matchesSearch;
+    return dateB - dateA;
   });
 }
 
-function renderNews() {
-  visibleArticles = filterArticles();
-
-  if (listingTitle) {
-    if (currentSearch) {
-      listingTitle.textContent = "Resultados da busca";
-    } else if (currentCategory !== "all") {
-      listingTitle.textContent = categoryLabel(currentCategory);
-    } else {
-      listingTitle.textContent = "Últimas notícias";
-    }
-  }
-
-  if (newsCount) {
-    newsCount.textContent =
-      `${visibleArticles.length} notícia(s)`;
-  }
-
-  renderFeatured();
-  renderNewsGrid();
+function normalized(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 }
 
-function renderFeatured() {
-  if (!featuredSection) return;
+/* =========================================================
+   CARTÕES E PÁGINA INICIAL
+========================================================= */
 
-  if (
-    currentCategory !== "all" ||
-    currentSearch ||
-    visibleArticles.length === 0
-  ) {
-    featuredSection.innerHTML = "";
-    featuredSection.classList.add("hidden");
-    return;
-  }
+function articleCard(article) {
+  const image = article.image
+    ? `<img class="news-card-image" src="${escapeHTML(article.image)}" alt="" loading="lazy">`
+    : `<div class="news-card-image" aria-hidden="true"></div>`;
 
-  const article = visibleArticles[0];
-  const image = articleImageURL(article);
-
-  featuredSection.classList.remove("hidden");
-
-  featuredSection.innerHTML = `
-    <article class="featured-card">
-      ${
-        image
-          ? `
-            <img
-              class="featured-image"
-              src="${escapeHTML(image)}"
-              alt="${escapeHTML(article.title || "Imagem da matéria")}"
-              loading="lazy"
-            >
-          `
-          : `
-            <div class="featured-image" aria-hidden="true"></div>
-          `
-      }
-
-      <div class="featured-copy">
+  return `
+    <article class="news-card">
+      ${image}
+      <div class="news-card-copy">
         <span class="tag">
           ${escapeHTML(categoryLabel(article.category))}
+          · ${escapeHTML(gameLabel(article.game))}
         </span>
 
-        <h2>${escapeHTML(article.title || "Sem título")}</h2>
-
-        <p>${escapeHTML(article.summary || "")}</p>
-
         <div class="meta">
-          <span>${escapeHTML(gameLabel(article.game))}</span>
-          <span>•</span>
-          <time>${escapeHTML(formatDate(article))}</time>
+          ${escapeHTML(formatDate(articleDate(article)))}
         </div>
+
+        <h3>${escapeHTML(article.title)}</h3>
+        <p>${escapeHTML(article.summary)}</p>
 
         <a
           class="read-link"
-          href="#materia-${encodeURIComponent(article.id)}"
+          href="#artigo/${encodeURIComponent(article.id)}"
           data-open-article="${escapeHTML(article.id)}"
         >
-          Ler matéria →
+          Ler matéria ↗
         </a>
       </div>
     </article>
   `;
 }
 
-function renderNewsGrid() {
-  if (!newsGrid) return;
-
-  const list = visibleArticles.slice(0, newsLimit);
-
-  if (!list.length) {
-    newsGrid.innerHTML = `
-      <div class="empty-state">
-        ${
-          currentSearch
-            ? "Nenhuma notícia encontrada para essa busca."
-            : "Ainda não há notícias publicadas nesta categoria."
-        }
-      </div>
-    `;
-
-    loadMoreBtn?.classList.add("hidden");
-    return;
-  }
-
-  const gridArticles =
-    currentCategory === "all" && !currentSearch
-      ? list.slice(1)
-      : list;
-
-  newsGrid.innerHTML = gridArticles.map((article) => {
-    const image = articleImageURL(article);
-
-    return `
-      <article class="news-card">
-        <a
-          href="#materia-${encodeURIComponent(article.id)}"
-          data-open-article="${escapeHTML(article.id)}"
-          aria-label="Ler ${escapeHTML(article.title || "matéria")}"
-        >
-          ${
-            image
-              ? `
-                <img
-                  class="news-card-image"
-                  src="${escapeHTML(image)}"
-                  alt="${escapeHTML(article.title || "")}"
-                  loading="lazy"
-                >
-              `
-              : `
-                <div class="news-card-image" aria-hidden="true"></div>
-              `
-          }
-        </a>
-
-        <div class="news-card-copy">
-          <span class="tag">
-            ${escapeHTML(categoryLabel(article.category))}
-          </span>
-
-          <h3>
-            <a
-              href="#materia-${encodeURIComponent(article.id)}"
-              data-open-article="${escapeHTML(article.id)}"
-            >
-              ${escapeHTML(article.title || "Sem título")}
-            </a>
-          </h3>
-
-          <p>${escapeHTML(article.summary || "")}</p>
-
-          <div class="meta">
-            <span>${escapeHTML(gameLabel(article.game))}</span>
-            <span>•</span>
-            <time>${escapeHTML(formatDate(article))}</time>
-          </div>
-
-          <a
-            class="read-link"
-            href="#materia-${encodeURIComponent(article.id)}"
-            data-open-article="${escapeHTML(article.id)}"
-          >
-            Ler matéria →
-          </a>
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  const hasMore = visibleArticles.length > newsLimit;
-
-  loadMoreBtn?.classList.toggle("hidden", !hasMore);
-}
-
-/* =========================================
-   ABRIR MATÉRIA
-========================================= */
-
-function sanitizeArticleHTML(html) {
-  if (!window.DOMPurify) {
-    const fallback = document.createElement("div");
-    fallback.textContent = html || "";
-    return fallback.innerHTML;
-  }
-
-  return window.DOMPurify.sanitize(html || "", {
-    ALLOWED_TAGS: [
-      "p", "br", "strong", "b", "em", "i", "u", "s", "del",
-      "h2", "h3", "h4", "ul", "ol", "li", "blockquote",
-      "a", "img", "video", "source", "iframe", "span",
-      "div", "figure", "figcaption", "font"
-    ],
-    ALLOWED_ATTR: [
-      "href", "src", "alt", "title", "target", "rel",
-      "width", "height", "controls", "controlslist",
-      "preload", "poster", "type", "loading",
-      "allow", "allowfullscreen", "frameborder",
-      "referrerpolicy", "class", "style", "color"
-    ],
-    ALLOW_DATA_ATTR: false,
-    ADD_ATTR: ["target"],
-    FORBID_TAGS: [
-      "script", "object", "embed", "form", "input",
-      "button", "textarea", "select"
-    ]
-  });
-}
-
-function openArticle(articleId) {
-  const article = allArticles.find(
-    (item) => item.id === articleId &&
-      item.status === "published"
+function renderHome() {
+  const published = sortNewest(
+    allArticles.filter(article => article.status === "published")
   );
 
-  if (!article || !articleView) {
-    showMessage("Esta matéria não está disponível.");
+  const searchTerm = normalized($("#searchInput")?.value || "");
+
+  visibleArticles = published.filter(article => {
+    const matchesCategory =
+      activeCategory === "all" ||
+      article.game === activeCategory ||
+      article.category === activeCategory;
+
+    const searchableText = normalized(
+      `${article.title} ${article.summary} ${article.content} ${article.videoUrl || ""} ${article.game} ${article.category}`
+    );
+
+    return matchesCategory &&
+      (!searchTerm || searchableText.includes(searchTerm));
+  });
+
+  const featured = $("#featuredSection");
+
+  if (featured) {
+    const item = visibleArticles[0];
+
+    featured.innerHTML = item
+      ? `
+        <article class="featured-card">
+          ${
+            item.image
+              ? `<img class="featured-image" src="${escapeHTML(item.image)}" alt="${escapeHTML(item.title)}">`
+              : `<div class="featured-image" aria-hidden="true"></div>`
+          }
+
+          <div class="featured-copy">
+            <span class="tag">
+              DESTAQUE · ${escapeHTML(categoryLabel(item.category))}
+            </span>
+
+            <div class="meta">
+              ${escapeHTML(gameLabel(item.game))}
+              · ${escapeHTML(formatDate(articleDate(item)))}
+            </div>
+
+            <h2>${escapeHTML(item.title)}</h2>
+            <p>${escapeHTML(item.summary)}</p>
+
+            <a
+              class="read-link"
+              href="#artigo/${encodeURIComponent(item.id)}"
+              data-open-article="${escapeHTML(item.id)}"
+            >
+              Ler notícia completa ↗
+            </a>
+          </div>
+        </article>
+      `
+      : "";
+  }
+
+  const grid = $("#newsGrid");
+  const count = $("#newsCount");
+  const title = $("#listingTitle");
+  const loadMore = $("#loadMoreBtn");
+
+  if (count) {
+    count.textContent =
+      `${visibleArticles.length} notícia${visibleArticles.length === 1 ? "" : "s"}`;
+  }
+
+  if (title) {
+    title.textContent = searchTerm
+      ? "Resultados da busca"
+      : activeCategory === "all"
+        ? "Últimas notícias"
+        : categoryLabel(activeCategory);
+  }
+
+  if (grid) {
+    if (!visibleArticles.length) {
+      grid.innerHTML = `
+        <div class="empty-state">
+          ${
+            searchTerm
+              ? "Nenhuma notícia corresponde à busca."
+              : "Ainda não há notícias publicadas nesta categoria."
+          }
+        </div>
+      `;
+    } else {
+      grid.innerHTML = visibleArticles
+        .slice(0, shownCount)
+        .map(articleCard)
+        .join("");
+    }
+  }
+
+  if (loadMore) {
+    loadMore.classList.toggle(
+      "hidden",
+      visibleArticles.length <= shownCount
+    );
+  }
+}
+
+/* =========================================================
+   VÍDEOS — LINKS E INCORPORAÇÃO
+========================================================= */
+
+function buildVideoEmbed(rawUrl) {
+  const value = String(rawUrl || "").trim();
+
+  if (!value) return "";
+
+  let url;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return "";
+  }
+
+  if (!["https:", "http:"].includes(url.protocol)) {
+    return "";
+  }
+
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  let src = "";
+  const parent = location.hostname || "localhost";
+
+  // YouTube
+  if ([
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com"
+  ].includes(host)) {
+    let id = url.searchParams.get("v");
+
+    if (
+      !id &&
+      ["shorts", "live", "embed", "v"].includes(pathParts[0])
+    ) {
+      id = pathParts[1];
+    }
+
+    if (!id || !/^[\w-]{11}$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  } else if (host === "youtu.be") {
+    const id = pathParts[0];
+
+    if (!id || !/^[\w-]{11}$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  }
+
+  // Vimeo
+  else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
+    const id =
+      host === "player.vimeo.com" && pathParts[0] === "video"
+        ? pathParts[1]
+        : pathParts[pathParts.length - 1];
+
+    if (!id || !/^\d+$/.test(id)) {
+      return "";
+    }
+
+    src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
+  }
+
+  // Dailymotion
+  else if (["dailymotion.com", "dai.ly"].includes(host)) {
+    let id = "";
+
+    if (host === "dai.ly") {
+      id = pathParts[0] || "";
+    } else if (pathParts[0] === "video") {
+      id = (pathParts[1] || "").split("_")[0];
+    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
+      id = pathParts[2] || "";
+    }
+
+    if (!id || !/^[A-Za-z0-9]+$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
+  }
+
+  // Twitch
+  else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
+    if (host === "clips.twitch.tv") {
+      const slug = pathParts[0];
+
+      if (!slug) return "";
+
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(parent)}`;
+    } else if (
+      pathParts[0] === "videos" &&
+      /^\d+$/.test(pathParts[1] || "")
+    ) {
+      src = `https://player.twitch.tv/?video=v${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (pathParts[0] === "clip" && pathParts[1]) {
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (
+      pathParts[0] &&
+      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"]
+        .includes(pathParts[0].toLowerCase())
+    ) {
+      src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
+    } else {
+      return "";
+    }
+  }
+
+  // Kick
+  else if (["kick.com", "player.kick.com"].includes(host)) {
+    const channel = pathParts[0];
+
+    if (
+      !channel ||
+      ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())
+    ) {
+      return "";
+    }
+
+    src = `https://player.kick.com/${encodeURIComponent(channel)}`;
+  }
+
+  // Arquivos de vídeo diretos
+  else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
+    return `
+      <div class="article-video">
+        <video controls playsinline preload="metadata">
+          <source src="${escapeHTML(url.href)}">
+          Seu navegador não conseguiu reproduzir este vídeo.
+        </video>
+      </div>
+    `;
+  } else {
+    return "";
+  }
+
+  return `
+    <div class="article-video">
+      <iframe
+        src="${escapeHTML(src)}"
+        title="Vídeo da matéria"
+        loading="lazy"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+  `;
+}
+
+/* =========================================================
+   CORPO DA MATÉRIA E MÍDIAS INSERIDAS
+========================================================= */
+
+function renderArticleBody(content, media = []) {
+  const byId = new Map(
+    (Array.isArray(media) ? media : []).map(item => [item.id, item])
+  );
+
+  const textHTML = value =>
+    String(value || "")
+      .split(/\n\s*\n/)
+      .map(paragraph => {
+        const clean = paragraph.trim();
+
+        return clean
+          ? `<p>${escapeHTML(clean).replace(/\n/g, "<br>")}</p>`
+          : "";
+      })
+      .join("");
+
+  const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
+
+  let html = "";
+  let cursor = 0;
+  let match;
+
+  const source = String(content || "");
+
+  while ((match = markerPattern.exec(source)) !== null) {
+    html += textHTML(source.slice(cursor, match.index));
+
+    const item = byId.get(match[1]);
+
+    if (item?.url) {
+      if (item.type === "image") {
+        html += `
+          <figure class="article-inline-media">
+            <img
+              src="${escapeHTML(item.url)}"
+              alt="${escapeHTML(item.caption || "Imagem da matéria")}"
+              loading="lazy"
+            >
+            ${
+              item.caption
+                ? `<figcaption>${escapeHTML(item.caption)}</figcaption>`
+                : ""
+            }
+          </figure>
+        `;
+      } else if (item.type === "video-upload") {
+        html += `
+          <div class="article-video article-inline-media">
+            <video controls playsinline preload="metadata">
+              <source src="${escapeHTML(item.url)}">
+              Seu navegador não conseguiu reproduzir este vídeo.
+            </video>
+            ${
+              item.caption
+                ? `<p class="media-caption">${escapeHTML(item.caption)}</p>`
+                : ""
+            }
+          </div>
+        `;
+      } else {
+        html += buildVideoEmbed(item.url);
+
+        if (item.caption) {
+          html += `<p class="media-caption">${escapeHTML(item.caption)}</p>`;
+        }
+      }
+    }
+
+    cursor = markerPattern.lastIndex;
+  }
+
+  html += textHTML(source.slice(cursor));
+
+  return html;
+}
+
+/* =========================================================
+   ABRIR E FECHAR MATÉRIAS
+========================================================= */
+
+function openArticle(id) {
+  const article = allArticles.find(
+    item => item.id === id && item.status === "published"
+  );
+
+  if (!article) {
+    showToast("Esta notícia não está disponível ou ainda não foi publicada.");
     return;
   }
 
-  currentArticleId = article.id;
+  $("#homeView")?.classList.add("hidden");
+  $("#adminPanel")?.classList.add("hidden");
 
-  const image = articleImageURL(article);
-  const safeContent = sanitizeArticleHTML(article.content || "");
+  const view = $("#articleView");
 
-  articleView.innerHTML = `
-    <a href="#" class="back-link" id="backToNews">
-      ← Voltar para as notícias
+  if (!view) return;
+
+  view.classList.remove("hidden");
+
+  const inlineBody =
+    Array.isArray(article.inlineMedia) && article.inlineMedia.length
+      ? renderArticleBody(article.content || "", article.inlineMedia)
+      : escapeHTML(article.content || "")
+          .split(/\n\s*\n/)
+          .map(paragraph => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
+          .join("");
+
+  view.innerHTML = `
+    <a href="#inicio" class="back-link" data-home>
+      ← Voltar às notícias
     </a>
 
-    <article>
-      <header class="article-header">
-        <span class="tag">
-          ${escapeHTML(categoryLabel(article.category))}
-        </span>
+    <header class="article-header">
+      <span class="tag">
+        ${escapeHTML(categoryLabel(article.category))}
+        · ${escapeHTML(gameLabel(article.game))}
+      </span>
 
-        <h1>${escapeHTML(article.title || "Sem título")}</h1>
+      <h1>${escapeHTML(article.title)}</h1>
+      <p class="article-summary">${escapeHTML(article.summary)}</p>
 
-        <p class="article-summary">
-          ${escapeHTML(article.summary || "")}
-        </p>
-
-        <div class="meta">
-          <span>${escapeHTML(gameLabel(article.game))}</span>
-          <span>•</span>
-          <time>${escapeHTML(formatDate(article))}</time>
-        </div>
-      </header>
-
-      ${
-        image
-          ? `
-            <img
-              class="article-hero-image"
-              src="${escapeHTML(image)}"
-              alt="${escapeHTML(article.title || "")}"
-            >
-          `
-          : ""
-      }
-
-      <div class="article-content">
-        ${safeContent}
+      <div class="meta">
+        ${escapeHTML(formatDate(articleDate(article)))}
       </div>
-    </article>
+    </header>
+
+    ${
+      article.image
+        ? `<img class="article-hero-image" src="${escapeHTML(article.image)}" alt="${escapeHTML(article.title)}">`
+        : ""
+    }
+
+    ${buildVideoEmbed(article.videoUrl || article.video || "")}
+
+    <div class="article-content">
+      ${inlineBody}
+    </div>
+
+    <p class="source-note">
+      Conteúdo do Rift Diário. Imagens e materiais de terceiros pertencem aos seus respectivos titulares.
+    </p>
   `;
 
-  homeView?.classList.add("hidden");
-  adminPanel?.classList.add("hidden");
-  articleView.classList.remove("hidden");
-
-  window.history.replaceState(
-    null,
-    "",
-    `#materia-${encodeURIComponent(article.id)}`
-  );
-
-  articleView.scrollIntoView({
-    behavior: "smooth",
-    block: "start"
-  });
+  history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function backToNews() {
-  currentArticleId = null;
+function goHome() {
+  $("#articleView")?.classList.add("hidden");
+  $("#homeView")?.classList.remove("hidden");
 
-  articleView?.classList.add("hidden");
-  homeView?.classList.remove("hidden");
-
-  window.history.replaceState(null, "", window.location.pathname);
-
-  window.scrollTo({
-    top: 0,
-    behavior: "smooth"
-  });
-}
-
-document.addEventListener("click", (event) => {
-  const articleLink = event.target.closest("[data-open-article]");
-
-  if (articleLink) {
-    event.preventDefault();
-
-    openArticle(articleLink.dataset.openArticle);
-    return;
-  }
-
-  if (event.target.closest("#backToNews")) {
-    event.preventDefault();
-    backToNews();
-  }
-});
-
-/* =========================================
-   NAVEGAÇÃO E CATEGORIAS
-========================================= */
-
-function activateCategory(category, clickedButton = null) {
-  currentCategory = category || "all";
-  newsLimit = 9;
-
-  $$(".nav-link").forEach((button) => {
-    const active = button === clickedButton;
-
-    button.classList.toggle("active", active);
-
-    if (active) {
-      button.setAttribute("aria-current", "page");
-    } else {
-      button.removeAttribute("aria-current");
-    }
-  });
-
-  backToNews();
-  renderNews();
-}
-
-$$(".nav-link").forEach((button) => {
-  button.addEventListener("click", () => {
-    activateCategory(button.dataset.category || "all", button);
-  });
-});
-
-searchToggle?.addEventListener("click", () => {
-  searchPanel?.classList.toggle("hidden");
-
-  if (!searchPanel?.classList.contains("hidden")) {
-    searchInput?.focus();
-  }
-});
-
-searchInput?.addEventListener("input", () => {
-  currentSearch = searchInput.value.trim();
-  newsLimit = 9;
-
-  backToNews();
-  renderNews();
-});
-
-clearSearch?.addEventListener("click", () => {
-  if (searchInput) {
-    searchInput.value = "";
-  }
-
-  currentSearch = "";
-  newsLimit = 9;
-
-  renderNews();
-  searchInput?.focus();
-});
-
-loadMoreBtn?.addEventListener("click", () => {
-  newsLimit += 9;
-  renderNewsGrid();
-});
-
-/* =========================================
-   ABAS DO PAINEL
-========================================= */
-
-function activateAdminTab(tabName) {
   if (!isAdmin) {
-    showMessage("Entre como administrador para acessar o painel.");
+    $("#adminPanel")?.classList.add("hidden");
+  }
+
+  history.replaceState(null, "", "#inicio");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* =========================================================
+   LOGIN E AUTORIZAÇÃO
+========================================================= */
+
+function openLogin() {
+  const overlay = $("#loginOverlay");
+
+  if (!overlay) {
+    showToast("O formulário de login não foi encontrado no HTML.");
     return;
   }
 
-  currentAdminTab = tabName;
+  setLoginError("");
+  overlay.classList.remove("hidden");
 
-  const tabIds = {
-    editor: "editorTab",
-    review: "reviewTab",
-    manage: "manageTab"
-  };
-
-  Object.entries(tabIds).forEach(([name, id]) => {
-    const element = document.getElementById(id);
-
-    element?.classList.toggle("hidden", name !== tabName);
-  });
-
-  $$("[data-admin-tab]").forEach((button) => {
-    button.classList.toggle(
-      "active",
-      button.dataset.adminTab === tabName
-    );
-  });
-
-  if (tabName === "review" || tabName === "manage") {
-    renderAdminLists();
-  }
+  setTimeout(() => $("#adminEmail")?.focus(), 50);
 }
 
-$$("[data-admin-tab]").forEach((button) => {
-  button.addEventListener("click", () => {
-    activateAdminTab(button.dataset.adminTab);
-  });
-});
+function closeLogin() {
+  $("#loginOverlay")?.classList.add("hidden");
+  setLoginError("");
+}
 
-/* =========================================
-   EDITOR RICO — CURSOR
-========================================= */
-
-function saveEditorSelection() {
-  if (!articleContent) return;
-
-  const selection = window.getSelection();
-
-  if (!selection || selection.rangeCount === 0) return;
-
-  const range = selection.getRangeAt(0);
-
+function requireAdmin() {
   if (
-    articleContent.contains(range.startContainer) &&
-    articleContent.contains(range.endContainer)
+    !currentUser ||
+    currentUser.uid !== ADMIN_UID ||
+    !isAdmin
   ) {
-    savedEditorRange = range.cloneRange();
-  }
-}
-
-function restoreEditorSelection() {
-  if (!articleContent) return;
-
-  articleContent.focus();
-
-  const selection = window.getSelection();
-
-  if (!selection) return;
-
-  selection.removeAllRanges();
-
-  if (
-    savedEditorRange &&
-    articleContent.contains(savedEditorRange.startContainer) &&
-    articleContent.contains(savedEditorRange.endContainer)
-  ) {
-    selection.addRange(savedEditorRange);
-    return;
-  }
-
-  const range = document.createRange();
-
-  range.selectNodeContents(articleContent);
-  range.collapse(false);
-
-  selection.addRange(range);
-
-  savedEditorRange = range.cloneRange();
-}
-
-articleContent?.addEventListener("keyup", saveEditorSelection);
-articleContent?.addEventListener("mouseup", saveEditorSelection);
-articleContent?.addEventListener("input", saveEditorSelection);
-articleContent?.addEventListener("focus", saveEditorSelection);
-
-document.addEventListener("selectionchange", () => {
-  if (
-    articleContent &&
-    articleContent.contains(document.activeElement)
-  ) {
-    saveEditorSelection();
-  }
-});
-
-/* =========================================
-   COMANDOS DE FORMATAÇÃO
-========================================= */
-
-function executeEditorCommand(command, value = null) {
-  if (!articleContent) return;
-
-  restoreEditorSelection();
-
-  document.execCommand(command, false, value);
-
-  saveEditorSelection();
-  articleContent.focus();
-}
-
-$$(".editor-toolbar [data-command]").forEach((button) => {
-  button.addEventListener("mousedown", (event) => {
-    // Evita perder a seleção do texto ao clicar na barra.
-    event.preventDefault();
-  });
-
-  button.addEventListener("click", () => {
-    executeEditorCommand(button.dataset.command);
-  });
-});
-
-editorBlockFormat?.addEventListener("change", () => {
-  const format = editorBlockFormat.value;
-
-  const formats = {
-    p: "p",
-    h2: "h2",
-    h3: "h3",
-    blockquote: "blockquote"
-  };
-
-  executeEditorCommand(
-    "formatBlock",
-    formats[format] || "p"
-  );
-});
-
-editorTextColor?.addEventListener("input", () => {
-  executeEditorCommand("foreColor", editorTextColor.value);
-});
-
-editorLinkBtn?.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-});
-
-editorLinkBtn?.addEventListener("click", () => {
-  const inputURL = window.prompt(
-    "Digite a URL do link (https://...)"
-  );
-
-  if (!inputURL) return;
-
-  const url = safeURL(inputURL.trim());
-
-  if (!url) {
-    showMessage("Informe uma URL válida começando com http:// ou https://.");
-    return;
-  }
-
-  executeEditorCommand("createLink", url);
-});
-
-/* =========================================
-   UPLOAD DE IMAGENS E VÍDEOS
-========================================= */
-
-function safeFileName(name) {
-  return String(name || "arquivo")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9._-]/g, "_")
-    .slice(-100);
-}
-
-function validateMediaFile(file, type) {
-  if (!file) return false;
-
-  const allowedImageTypes = [
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/gif"
-  ];
-
-  const allowedVideoTypes = [
-    "video/mp4",
-    "video/webm",
-    "video/ogg"
-  ];
-
-  const allowedTypes =
-    type === "image" ? allowedImageTypes : allowedVideoTypes;
-
-  if (!allowedTypes.includes(file.type)) {
-    showMessage(
-      type === "image"
-        ? "Escolha uma imagem JPG, PNG, WEBP ou GIF."
-        : "Escolha um vídeo MP4, WEBM ou OGG."
-    );
-
-    return false;
-  }
-
-  const maxSize =
-    type === "image"
-      ? 10 * 1024 * 1024
-      : 100 * 1024 * 1024;
-
-  if (file.size > maxSize) {
-    showMessage(
-      type === "image"
-        ? "A imagem deve ter no máximo 10 MB."
-        : "O vídeo deve ter no máximo 100 MB."
-    );
-
+    showToast("Entre com a conta autorizada para administrar as matérias.");
+    openLogin();
     return false;
   }
 
   return true;
 }
 
-async function uploadMedia(file, type) {
-  if (!isAdmin || !currentUser) {
-    throw new Error("Você precisa estar autenticado como administrador.");
-  }
+/* =========================================================
+   ABAS DO PAINEL ADMINISTRATIVO
+========================================================= */
 
-  const timestamp = Date.now();
-  const fileName = safeFileName(file.name);
+function setAdminTab(tab) {
+  const validTabs = ["editor", "review", "manage"];
 
-  const storagePath =
-    `articles/${currentUser.uid}/${timestamp}_${fileName}`;
+  if (!validTabs.includes(tab)) return;
 
-  const storageRef = ref(storage, storagePath);
+  activeAdminTab = tab;
 
-  const snapshot = await uploadBytes(storageRef, file, {
-    contentType: file.type,
-    customMetadata: {
-      uploadedBy: currentUser.uid,
-      mediaType: type
-    }
-  });
-
-  return getDownloadURL(snapshot.ref);
-}
-
-function insertHTMLAtCursor(html) {
-  if (!articleContent) return;
-
-  restoreEditorSelection();
-
-  const selection = window.getSelection();
-
-  if (!selection || selection.rangeCount === 0) {
-    articleContent.insertAdjacentHTML("beforeend", html);
-    return;
-  }
-
-  const range = selection.getRangeAt(0);
-
-  if (
-    !articleContent.contains(range.startContainer) ||
-    !articleContent.contains(range.endContainer)
-  ) {
-    articleContent.insertAdjacentHTML("beforeend", html);
-    return;
-  }
-
-  range.deleteContents();
-
-  const fragment = range.createContextualFragment(html);
-  const lastNode = fragment.lastChild;
-
-  range.insertNode(fragment);
-
-  if (lastNode) {
-    range.setStartAfter(lastNode);
-    range.collapse(true);
-
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
-  savedEditorRange = range.cloneRange();
-  articleContent.focus();
-}
-
-async function handleMediaUpload(file, type, button, input) {
-  if (!file) return;
-
-  if (!validateMediaFile(file, type)) {
-    if (input) input.value = "";
-    return;
-  }
-
-  if (!isAdmin) {
-    showMessage("Somente o administrador pode enviar mídias.");
-    if (input) input.value = "";
-    return;
-  }
-
-  setButtonLoading(
-    button,
-    true,
-    type === "image" ? "Enviando imagem..." : "Enviando vídeo..."
-  );
-
-  try {
-    const url = await uploadMedia(file, type);
-    const safe = escapeHTML(url);
-
-    if (type === "image") {
-      insertHTMLAtCursor(`
-        <p>
-          <img
-            src="${safe}"
-            alt="${escapeHTML(file.name)}"
-            loading="lazy"
-          >
-        </p>
-      `);
-    } else {
-      insertHTMLAtCursor(`
-        <p>
-          <video controls preload="metadata">
-            <source
-              src="${safe}"
-              type="${escapeHTML(file.type)}"
-            >
-            Seu navegador não consegue reproduzir este vídeo.
-          </video>
-        </p>
-      `);
-    }
-
-    showMessage(
-      type === "image"
-        ? "Imagem enviada e inserida no texto!"
-        : "Vídeo enviado e inserido no texto!",
-      "success"
-    );
-  } catch (error) {
-    console.error("Erro no upload:", error);
-
-    showMessage(
-      "Não foi possível enviar o arquivo. Verifique se o Firebase Storage está habilitado e se as regras permitem o upload."
-    );
-  } finally {
-    setButtonLoading(button, false);
-
-    if (input) {
-      input.value = "";
-    }
-
-    articleContent?.focus();
-  }
-}
-
-insertImageBtn?.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-  saveEditorSelection();
-});
-
-insertImageBtn?.addEventListener("click", () => {
-  saveEditorSelection();
-  editorImageInput?.click();
-});
-
-insertVideoBtn?.addEventListener("mousedown", (event) => {
-  event.preventDefault();
-  saveEditorSelection();
-});
-
-insertVideoBtn?.addEventListener("click", () => {
-  saveEditorSelection();
-  editorVideoInput?.click();
-});
-
-editorImageInput?.addEventListener("change", async () => {
-  await handleMediaUpload(
-    editorImageInput.files?.[0],
-    "image",
-    insertImageBtn,
-    editorImageInput
-  );
-});
-
-editorVideoInput?.addEventListener("change", async () => {
-  await handleMediaUpload(
-    editorVideoInput.files?.[0],
-    "video",
-    insertVideoBtn,
-    editorVideoInput
-  );
-});
-
-/* =========================================
-   CONTEÚDO SEGURO PARA SALVAR
-========================================= */
-
-function cleanEditorHTML() {
-  if (!articleContent) return "";
-
-  const rawHTML = articleContent.innerHTML.trim();
-
-  if (!window.DOMPurify) {
-    const text = articleContent.innerText.trim();
-
-    if (!text) return "";
-
-    showMessage(
-      "O sanitizador não carregou. Verifique sua conexão e tente novamente."
-    );
-
-    return null;
-  }
-
-  return window.DOMPurify.sanitize(rawHTML, {
-    ALLOWED_TAGS: [
-      "p", "br", "strong", "b", "em", "i", "u", "s", "del",
-      "h2", "h3", "h4", "ul", "ol", "li", "blockquote",
-      "a", "img", "video", "source", "iframe", "span",
-      "div", "figure", "figcaption", "font"
-    ],
-    ALLOWED_ATTR: [
-      "href", "src", "alt", "title", "target", "rel",
-      "width", "height", "controls", "controlslist",
-      "preload", "poster", "type", "loading",
-      "allow", "allowfullscreen", "frameborder",
-      "referrerpolicy", "class", "style", "color"
-    ],
-    ALLOW_DATA_ATTR: false,
-    ADD_ATTR: ["target"],
-    FORBID_TAGS: [
-      "script", "object", "embed", "form", "input",
-      "button", "textarea", "select"
-    ]
-  });
-}
-
-function editorHasContent(html) {
-  if (!html) return false;
-
-  const container = document.createElement("div");
-  container.innerHTML = html;
-
-  return Boolean(
-    container.textContent.trim() ||
-    container.querySelector("img, video, iframe")
-  );
-}
-
-/* =========================================
-   SALVAR MATÉRIA OU RASCUNHO
-========================================= */
-
-async function saveArticle(status) {
-  if (!isAdmin || !currentUser) {
-    showMessage("Faça login como administrador antes de publicar.");
-    return;
-  }
-
-  const title = articleTitle?.value.trim() || "";
-  const summary = articleSummary?.value.trim() || "";
-  const game = articleGame?.value || "wild-rift";
-  const category = articleCategory?.value || "atualizacoes";
-  const image = articleImage?.value.trim() || "";
-
-  if (!title || !summary) {
-    showMessage("Preencha o título e o resumo da matéria.");
-    return;
-  }
-
-  if (title.length > 140) {
-    showMessage("O título deve ter no máximo 140 caracteres.");
-    return;
-  }
-
-  if (summary.length > 300) {
-    showMessage("O resumo deve ter no máximo 300 caracteres.");
-    return;
-  }
-
-  if (image && !safeURL(image)) {
-    showMessage("A URL da imagem de capa é inválida.");
-    return;
-  }
-
-  const content = cleanEditorHTML();
-
-  if (content === null) return;
-
-  if (!editorHasContent(content)) {
-    showMessage("Escreva o conteúdo da matéria antes de salvar.");
-    return;
-  }
-
-  const isEditing = Boolean(editingArticle?.id);
-  const button = status === "published" ? saveArticleBtn : saveDraftBtn;
-
-  setButtonLoading(
-    button,
-    true,
-    status === "published" ? "Publicando..." : "Salvando..."
-  );
-
-  const payload = {
-    title,
-    summary,
-    game,
-    category,
-    image: safeURL(image),
-    content,
-    status,
-    updatedAt: serverTimestamp(),
-    updatedBy: currentUser.uid
+  const panels = {
+    editor: $("#editorTab"),
+    review: $("#reviewTab"),
+    manage: $("#manageTab")
   };
 
-  try {
-    if (isEditing) {
-      await updateDoc(
-        doc(db, "articles", editingArticle.id),
-        payload
-      );
-    } else {
-      await addDoc(articlesCollection, {
-        ...payload,
-        createdAt: serverTimestamp(),
-        createdBy: currentUser.uid
-      });
-    }
+  $$("[data-admin-tab]").forEach(button => {
+    const active = button.dataset.adminTab === tab;
 
-    showMessage(
-      status === "published"
-        ? isEditing
-          ? "Matéria atualizada e publicada!"
-          : "Matéria publicada com sucesso!"
-        : isEditing
-          ? "Rascunho atualizado!"
-          : "Rascunho salvo com sucesso!",
-      "success"
-    );
-
-    resetEditor();
-    await loadArticles();
-
-    activateAdminTab("manage");
-  } catch (error) {
-    console.error("Erro ao salvar matéria:", error);
-
-    showMessage(
-      "Não foi possível salvar. Verifique as regras do Firestore e tente novamente."
-    );
-  } finally {
-    setButtonLoading(button, false);
-  }
-}
-
-articleForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await saveArticle("published");
-});
-
-saveDraftBtn?.addEventListener("click", async () => {
-  await saveArticle("draft");
-});
-
-/* =========================================
-   EDITAR MATÉRIA
-========================================= */
-
-function editArticle(articleId) {
-  if (!isAdmin) {
-    showMessage("Somente o administrador pode editar matérias.");
-    return;
-  }
-
-  const article = allArticles.find(
-    (item) => item.id === articleId
-  );
-
-  if (!article) {
-    showMessage("Matéria não encontrada.");
-    return;
-  }
-
-  editingArticle = article;
-
-  if ($("#editingId")) {
-    $("#editingId").value = article.id;
-  }
-
-  if (articleTitle) articleTitle.value = article.title || "";
-  if (articleSummary) articleSummary.value = article.summary || "";
-  if (articleGame) articleGame.value = article.game || "wild-rift";
-  if (articleCategory) {
-    articleCategory.value = article.category || "atualizacoes";
-  }
-
-  if (articleImage) articleImage.value = article.image || "";
-  if (articleContent) {
-    articleContent.innerHTML = sanitizeArticleHTML(article.content || "");
-  }
-
-  if (saveArticleBtn) {
-    saveArticleBtn.textContent =
-      article.status === "published"
-        ? "Atualizar e publicar"
-        : "Publicar matéria";
-  }
-
-  if (saveDraftBtn) {
-    saveDraftBtn.textContent = "Salvar alterações como rascunho";
-  }
-
-  cancelEditBtn?.classList.remove("hidden");
-
-  activateAdminTab("editor");
-
-  adminPanel?.scrollIntoView({
-    behavior: "smooth",
-    block: "start"
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
   });
 
-  showMessage("Matéria carregada no editor.", "success");
+  Object.entries(panels).forEach(([name, panel]) => {
+    if (panel) {
+      panel.classList.toggle("hidden", name !== tab);
+    }
+  });
+
+  if (tab === "review") renderReviewQueue();
+  if (tab === "manage") renderPublishedManage();
 }
 
-function resetEditor() {
-  articleForm?.reset();
+/* =========================================================
+   FORMULÁRIO DE MATÉRIAS
+========================================================= */
 
-  if (articleContent) {
-    articleContent.innerHTML = "";
-  }
+function resetArticleForm() {
+  $("#articleForm")?.reset();
 
   if ($("#editingId")) {
     $("#editingId").value = "";
   }
 
-  editingArticle = null;
-  savedEditorRange = null;
-
-  if (saveArticleBtn) {
-    saveArticleBtn.textContent = "Publicar matéria";
+  if ($("#saveArticleBtn")) {
+    $("#saveArticleBtn").textContent = "Publicar matéria";
   }
 
-  if (saveDraftBtn) {
-    saveDraftBtn.textContent = "Salvar rascunho";
-  }
+  $("#cancelEditBtn")?.classList.add("hidden");
 
-  cancelEditBtn?.classList.add("hidden");
+  currentArticleId = null;
+  inlineMediaDraft = [];
+  uploadInProgress = false;
 
-  if (editorImageInput) editorImageInput.value = "";
-  if (editorVideoInput) editorVideoInput.value = "";
+  renderInlineMediaManager();
+  updateInlinePreview();
 }
 
-cancelEditBtn?.addEventListener("click", () => {
-  resetEditor();
-
-  showMessage("Edição cancelada.", "success");
-});
-
-/* =========================================
-   PUBLICAR, DESPUBLICAR E EXCLUIR
-========================================= */
-
-async function changeArticleStatus(articleId, status) {
-  if (!isAdmin || !currentUser) {
-    showMessage("Ação permitida apenas para o administrador.");
-    return;
-  }
-
-  try {
-    await updateDoc(doc(db, "articles", articleId), {
-      status,
-      updatedAt: serverTimestamp(),
-      updatedBy: currentUser.uid
-    });
-
-    showMessage(
-      status === "published"
-        ? "Matéria publicada!"
-        : "Matéria salva como rascunho.",
-      "success"
-    );
-
-    await loadArticles();
-  } catch (error) {
-    console.error("Erro ao alterar status:", error);
-    showMessage("Não foi possível atualizar o status da matéria.");
-  }
-}
-
-async function removeArticle(articleId) {
-  if (!isAdmin || !currentUser) {
-    showMessage("Ação permitida apenas para o administrador.");
-    return;
-  }
-
-  const article = allArticles.find(
-    (item) => item.id === articleId
-  );
+function fillEditor(id) {
+  const article = allArticles.find(item => item.id === id);
 
   if (!article) return;
 
-  const confirmed = window.confirm(
-    `Deseja excluir a matéria "${article.title || "Sem título"}"? Esta ação não pode ser desfeita.`
-  );
+  currentArticleId = id;
 
-  if (!confirmed) return;
+  if ($("#editingId")) {
+    $("#editingId").value = id;
+  }
+
+  $("#articleTitle").value = article.title || "";
+  $("#articleSummary").value = article.summary || "";
+  $("#articleGame").value = article.game || "wild-rift";
+  $("#articleCategory").value = article.category || "atualizacoes";
+  $("#articleImage").value = article.image || "";
+
+  if ($("#articleVideoUrl")) {
+    $("#articleVideoUrl").value = article.videoUrl || article.video || "";
+  }
+
+  $("#articleContent").value = article.content || "";
+
+  inlineMediaDraft = Array.isArray(article.inlineMedia)
+    ? article.inlineMedia.map(item => ({ ...item }))
+    : [];
+
+  renderInlineMediaManager();
+  updateInlinePreview();
+
+  $("#saveArticleBtn").textContent =
+    article.status === "published"
+      ? "Salvar alterações"
+      : "Publicar matéria";
+
+  $("#cancelEditBtn")?.classList.remove("hidden");
+
+  setAdminTab("editor");
+
+  $("#adminPanel")?.scrollIntoView({
+    behavior: "smooth",
+    block: "start"
+  });
+}
+
+/* =========================================================
+   INSERÇÃO DE IMAGEM E VÍDEO NO TEXTO
+========================================================= */
+
+function insertMarkerAtCursor(id) {
+  const field = $("#articleContent");
+
+  if (!field) return;
+
+  const marker = `\n\n[[MEDIA:${id}]]\n\n`;
+
+  const start = Number.isInteger(field.selectionStart)
+    ? field.selectionStart
+    : field.value.length;
+
+  const end = Number.isInteger(field.selectionEnd)
+    ? field.selectionEnd
+    : field.value.length;
+
+  field.value =
+    field.value.slice(0, start) +
+    marker +
+    field.value.slice(end);
+
+  const cursor = start + marker.length;
+
+  field.focus();
+  field.setSelectionRange(cursor, cursor);
+
+  updateInlinePreview();
+}
+
+function renderInlineMediaManager() {
+  const host = $("#inlineMediaList");
+
+  if (!host) return;
+
+  host.innerHTML = inlineMediaDraft.length
+    ? inlineMediaDraft.map(item => `
+        <div class="inline-media-item">
+          <span class="inline-media-kind">
+            ${
+              item.type === "image"
+                ? "IMAGEM"
+                : item.type === "video-upload"
+                  ? "VÍDEO ENVIADO"
+                  : "VÍDEO POR LINK"
+            }
+          </span>
+
+          <span class="inline-media-name">
+            ${escapeHTML(item.caption || item.name || item.url)}
+          </span>
+
+          <button
+            type="button"
+            class="text-btn"
+            data-remove-inline-media="${escapeHTML(item.id)}"
+          >
+            Remover
+          </button>
+        </div>
+      `).join("")
+    : `<p class="form-hint">Nenhuma mídia inserida no corpo da matéria.</p>`;
+}
+
+function updateInlinePreview() {
+  const host = $("#inlineMediaPreview");
+
+  if (!host) return;
+
+  const content = $("#articleContent")?.value || "";
+
+  host.innerHTML =
+    renderArticleBody(content, inlineMediaDraft) ||
+    `<p class="form-hint">A prévia da matéria com mídias aparecerá aqui.</p>`;
+}
+
+async function uploadInlineFile(file, type) {
+  if (!file) return;
+  if (!requireAdmin()) return;
+
+  const isImage = type === "image";
+
+  const allowed = isImage
+    ? ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]
+    : ["video/mp4", "video/webm", "video/ogg", "video/quicktime"];
+
+  if (!allowed.includes(file.type)) {
+    showToast(
+      isImage
+        ? "Use uma imagem JPG, PNG, WEBP, GIF ou AVIF."
+        : "Use um vídeo MP4, WEBM, OGG ou MOV.",
+      5000
+    );
+    return;
+  }
+
+  const maxBytes = isImage
+    ? 12 * 1024 * 1024
+    : 150 * 1024 * 1024;
+
+  if (file.size > maxBytes) {
+    showToast(
+      isImage
+        ? "A imagem deve ter no máximo 12 MB."
+        : "O vídeo deve ter no máximo 150 MB.",
+      5000
+    );
+    return;
+  }
+
+  const id =
+    `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `articles-inline/${currentUser.uid}/${id}_${safeName}`;
+
+  const buttons = [
+    $("#uploadImageBtn"),
+    $("#uploadVideoBtn"),
+    $("#insertVideoLinkBtn")
+  ].filter(Boolean);
+
+  uploadInProgress = true;
+  buttons.forEach(button => {
+    button.disabled = true;
+  });
+
+  showToast(`Enviando ${isImage ? "imagem" : "vídeo"}...`, 6000);
 
   try {
-    await deleteDoc(doc(db, "articles", articleId));
+    const fileRef = storageRef(storage, path);
 
-    if (editingArticle?.id === articleId) {
-      resetEditor();
-    }
+    await uploadBytes(fileRef, file, {
+      contentType: file.type,
+      customMetadata: {
+        uploadedBy: currentUser.uid
+      }
+    });
 
-    showMessage("Matéria excluída.", "success");
-    await loadArticles();
+    const url = await getDownloadURL(fileRef);
+
+    const caption =
+      $("#articleMediaCaption")?.value.trim() ||
+      file.name.replace(/\.[^.]+$/, "");
+
+    inlineMediaDraft.push({
+      id,
+      type: isImage ? "image" : "video-upload",
+      url,
+      caption,
+      name: file.name,
+      storagePath: path
+    });
+
+    insertMarkerAtCursor(id);
+    renderInlineMediaManager();
+
+    showToast(
+      `${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`
+    );
   } catch (error) {
-    console.error("Erro ao excluir:", error);
-    showMessage("Não foi possível excluir a matéria.");
-  }
-}
+    console.error("Erro ao enviar mídia para o Firebase Storage:", error);
 
-/* =========================================
-   LISTAS ADMINISTRATIVAS
-========================================= */
+    showToast(
+      friendlyFirestoreError(
+        error,
+        "enviar a mídia. Confira se o Firebase Storage está habilitado e suas regras permitem upload administrativo."
+      ),
+      7000
+    );
+  } finally {
+    uploadInProgress = false;
 
-function renderAdminLists() {
-  if (!isAdmin) return;
+    buttons.forEach(button => {
+      button.disabled = false;
+    });
 
-  const drafts = allArticles.filter(
-    (article) => article.status === "draft"
-  );
-
-  const published = allArticles.filter(
-    (article) => article.status === "published"
-  );
-
-  if (reviewCount) {
-    reviewCount.textContent = String(drafts.length);
-  }
-
-  if (reviewQueue) {
-    if (!drafts.length) {
-      reviewQueue.innerHTML = `
-        <p class="empty-state">
-          Não há rascunhos aguardando revisão.
-        </p>
-      `;
-    } else {
-      reviewQueue.innerHTML = drafts.map((article) => {
-        return renderAdminItem(article, "draft");
-      }).join("");
+    if ($("#uploadImageInput")) {
+      $("#uploadImageInput").value = "";
     }
-  }
 
-  if (publishedManage) {
-    if (!published.length) {
-      publishedManage.innerHTML = `
-        <p class="empty-state">
-          Nenhuma matéria publicada ainda.
-        </p>
-      `;
-    } else {
-      publishedManage.innerHTML = published.map((article) => {
-        return renderAdminItem(article, "published");
-      }).join("");
+    if ($("#uploadVideoInput")) {
+      $("#uploadVideoInput").value = "";
     }
   }
 }
 
-function renderAdminItem(article, status) {
-  const image = articleImageURL(article);
+function insertVideoLinkAtCursor() {
+  if (!requireAdmin()) return;
+
+  const input = $("#articleInlineVideoUrl");
+  const url = input?.value.trim() || "";
+
+  if (!url) {
+    showToast("Cole primeiro o link do vídeo.");
+    return;
+  }
+
+  if (!buildVideoEmbed(url)) {
+    showToast(
+      "Link não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou MP4/WebM/OGG direto.",
+      6000
+    );
+    return;
+  }
+
+  const id =
+    `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const caption = $("#articleMediaCaption")?.value.trim() || "";
+
+  inlineMediaDraft.push({
+    id,
+    type: "video-link",
+    url,
+    caption,
+    name: url
+  });
+
+  insertMarkerAtCursor(id);
+  renderInlineMediaManager();
+
+  input.value = "";
+
+  showToast("Vídeo inserido no ponto do cursor.");
+}
+
+function removeInlineMedia(id) {
+  inlineMediaDraft = inlineMediaDraft.filter(item => item.id !== id);
+
+  const field = $("#articleContent");
+
+  if (field) {
+    field.value = field.value.replace(
+      new RegExp(`\\n?\\s*\\[\\[MEDIA:${id}\\]\\]\\s*`, "g"),
+      "\n\n"
+    );
+  }
+
+  renderInlineMediaManager();
+  updateInlinePreview();
+}
+
+/* =========================================================
+   SALVAR E PUBLICAR MATÉRIAS
+========================================================= */
+
+function articleFromForm(status) {
+  return {
+    title: $("#articleTitle").value.trim(),
+    summary: $("#articleSummary").value.trim(),
+    game: $("#articleGame").value,
+    category: $("#articleCategory").value,
+    image: $("#articleImage").value.trim(),
+    videoUrl: $("#articleVideoUrl")?.value.trim() || "",
+    content: $("#articleContent").value.trim(),
+
+    inlineMedia: inlineMediaDraft.map(item => ({
+      id: item.id,
+      type: item.type,
+      url: item.url,
+      caption: item.caption || "",
+      name: item.name || "",
+      storagePath: item.storagePath || ""
+    })),
+
+    status,
+    updatedAt: serverTimestamp(),
+
+    ...(status === "published"
+      ? { publishedAt: serverTimestamp() }
+      : {})
+  };
+}
+
+async function saveArticle(event, status) {
+  event?.preventDefault();
+
+  if (!requireAdmin()) return;
+
+  const form = $("#articleForm");
+
+  if (!form.reportValidity()) return;
+
+  const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
+
+  if (videoUrl && !buildVideoEmbed(videoUrl)) {
+    showToast(
+      "Link de vídeo não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou um arquivo MP4/WebM/OGG direto.",
+      6000
+    );
+    return;
+  }
+
+  if (uploadInProgress) {
+    showToast("Aguarde o término do upload antes de salvar a matéria.");
+    return;
+  }
+
+  const payload = articleFromForm(status);
+  const button = $("#saveArticleBtn");
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Salvando...";
+  }
+
+  try {
+    if (currentArticleId) {
+      await updateDoc(
+        doc(db, "articles", currentArticleId),
+        payload
+      );
+
+      showToast(
+        status === "published"
+          ? "Matéria atualizada e publicada."
+          : "Rascunho atualizado."
+      );
+    } else {
+      await addDoc(articlesRef, {
+        ...payload,
+        createdAt: serverTimestamp()
+      });
+
+      showToast(
+        status === "published"
+          ? "Matéria publicada."
+          : "Rascunho salvo."
+      );
+    }
+
+    resetArticleForm();
+
+    setAdminTab(status === "draft" ? "review" : "manage");
+  } catch (error) {
+    console.error("Erro ao salvar matéria no Firestore:", error);
+
+    showToast(
+      friendlyFirestoreError(error, "salvar a matéria"),
+      6000
+    );
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = currentArticleId
+        ? "Salvar alterações"
+        : "Publicar matéria";
+    }
+  }
+}
+
+function friendlyFirestoreError(error, action) {
+  if (error?.code === "permission-denied") {
+    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore ou do Storage.`;
+  }
+
+  if (error?.code === "unavailable") {
+    return "O Firebase está indisponível no momento. Confira a conexão e tente novamente.";
+  }
+
+  if (error?.code === "failed-precondition") {
+    return "O Firestore informou uma pré-condição ausente. Veja o erro no console do navegador.";
+  }
+
+  return `Não foi possível ${action}. Código: ${error?.code || error?.message || "erro desconhecido"}.`;
+}
+
+/* =========================================================
+   LISTAS DO PAINEL ADMINISTRATIVO
+========================================================= */
+
+function adminItem(article, mode) {
+  const image = article.image
+    ? `<img src="${escapeHTML(article.image)}" alt="" loading="lazy">`
+    : `<div aria-hidden="true"></div>`;
+
+  const status =
+    article.status === "published"
+      ? "Publicada"
+      : article.status === "review"
+        ? "Em revisão"
+        : "Rascunho";
+
+  const actionButtons = mode === "review"
+    ? `
+      <button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">
+        Aprovar e publicar
+      </button>
+
+      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">
+        Editar
+      </button>
+
+      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">
+        Excluir
+      </button>
+    `
+    : `
+      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">
+        Editar
+      </button>
+
+      ${
+        article.status !== "published"
+          ? `<button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">Publicar</button>`
+          : `<button class="secondary-btn" data-article-action="draft" data-id="${escapeHTML(article.id)}">Tornar rascunho</button>`
+      }
+
+      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">
+        Excluir
+      </button>
+    `;
 
   return `
     <article class="admin-item">
-      ${
-        image
-          ? `
-            <img
-              src="${escapeHTML(image)}"
-              alt=""
-              loading="lazy"
-            >
-          `
-          : `
-            <div class="admin-item-image" aria-hidden="true"></div>
-          `
-      }
+      ${image}
 
       <div>
         <h3>${escapeHTML(article.title || "Sem título")}</h3>
 
         <p>
-          ${escapeHTML(gameLabel(article.game))}
-          • ${escapeHTML(categoryLabel(article.category))}
-          • ${escapeHTML(formatDate(article))}
+          ${escapeHTML(status)}
+          · ${escapeHTML(gameLabel(article.game))}
+          · ${escapeHTML(categoryLabel(article.category))}
         </p>
 
-        <p>${escapeHTML(article.summary || "")}</p>
+        <p>${escapeHTML(article.summary || "Sem resumo")}</p>
       </div>
 
       <div class="admin-item-actions">
-        <button
-          type="button"
-          data-action="edit"
-          data-id="${escapeHTML(article.id)}"
-        >
-          Editar
-        </button>
-
-        ${
-          status === "draft"
-            ? `
-              <button
-                type="button"
-                data-action="publish"
-                data-id="${escapeHTML(article.id)}"
-              >
-                Publicar
-              </button>
-            `
-            : `
-              <button
-                type="button"
-                data-action="unpublish"
-                data-id="${escapeHTML(article.id)}"
-              >
-                Despublicar
-              </button>
-            `
-        }
-
-        <button
-          type="button"
-          class="danger-btn"
-          data-action="delete"
-          data-id="${escapeHTML(article.id)}"
-        >
-          Excluir
-        </button>
+        ${actionButtons}
       </div>
     </article>
   `;
 }
 
-document.addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-action]");
+function renderReviewQueue() {
+  const host = $("#reviewQueue");
 
-  if (!button) return;
+  if (!host) return;
 
-  if (!isAdmin) {
-    showMessage("Você precisa estar autenticado como administrador.");
-    return;
+  const items = sortNewest(
+    allArticles.filter(
+      article =>
+        article.status === "draft" ||
+        article.status === "review"
+    )
+  );
+
+  if ($("#reviewCount")) {
+    $("#reviewCount").textContent = String(items.length);
   }
 
-  const articleId = button.dataset.id;
-  const action = button.dataset.action;
+  host.innerHTML = items.length
+    ? items.map(article => adminItem(article, "review")).join("")
+    : `<p class="empty-state">Nenhum rascunho aguardando revisão.</p>`;
+}
 
-  if (!articleId) return;
+function renderPublishedManage() {
+  const host = $("#publishedManage");
 
-  if (action === "edit") {
-    editArticle(articleId);
-  } else if (action === "publish") {
-    await changeArticleStatus(articleId, "published");
-  } else if (action === "unpublish") {
-    await changeArticleStatus(articleId, "draft");
-  } else if (action === "delete") {
-    await removeArticle(articleId);
-  }
-});
+  if (!host) return;
 
-/* =========================================
-   INICIALIZAÇÃO DA PÁGINA
-========================================= */
+  const items = sortNewest(
+    allArticles.filter(article => article.status === "published")
+  );
 
-async function initializePage() {
+  host.innerHTML = items.length
+    ? items.map(article => adminItem(article, "manage")).join("")
+    : `<p class="empty-state">Ainda não há matérias publicadas.</p>`;
+}
+
+async function handleArticleAction(event) {
+  const button = event.target.closest("[data-article-action]");
+
+  if (!button || !requireAdmin()) return;
+
+  const id = button.dataset.id;
+  const action = button.dataset.articleAction;
+  const article = allArticles.find(item => item.id === id);
+
+  if (!article) return;
+
   try {
-    await loadArticles();
+    if (action === "edit") {
+      fillEditor(id);
+      return;
+    }
+
+    if (action === "delete") {
+      if (
+        !confirm(
+          `Excluir a matéria “${article.title}”? Esta ação não pode ser desfeita.`
+        )
+      ) {
+        return;
+      }
+
+      await deleteDoc(doc(db, "articles", id));
+
+      showToast("Matéria excluída.");
+    } else if (action === "publish") {
+      await updateDoc(doc(db, "articles", id), {
+        status: "published",
+        publishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      showToast("Matéria publicada.");
+    } else if (action === "draft") {
+      await updateDoc(doc(db, "articles", id), {
+        status: "draft",
+        updatedAt: serverTimestamp()
+      });
+
+      showToast("Matéria voltou para rascunho.");
+    }
   } catch (error) {
-    console.error("Erro na inicialização:", error);
-  }
+    console.error("Erro ao administrar matéria:", error);
 
-  const navButtons = $$(".nav-link");
-
-  const initialButton =
-    navButtons.find(
-      (button) => button.dataset.category === "all"
-    ) || navButtons[0];
-
-  if (initialButton) {
-    activateCategory(
-      initialButton.dataset.category || "all",
-      initialButton
+    showToast(
+      friendlyFirestoreError(error, "alterar a matéria"),
+      6000
     );
   }
 }
 
-initializePage();
+/* =========================================================
+   FIRESTORE — CARREGAMENTO PÚBLICO E ADMINISTRATIVO
+========================================================= */
+
+// Visitantes consultam apenas artigos publicados.
+// A condição status == "published" é necessária para corresponder
+// às permissões de leitura pública configuradas no Firestore.
+function startPublicListener() {
+  if (unsubscribePublic) {
+    unsubscribePublic();
+  }
+
+  const publishedQuery = query(
+    articlesRef,
+    where("status", "==", "published")
+  );
+
+  unsubscribePublic = onSnapshot(
+    publishedQuery,
+    snapshot => {
+      const publicItems = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      if (isAdmin) {
+        allArticles = [
+          ...allArticles.filter(article => article.status !== "published"),
+          ...publicItems
+        ];
+
+        allArticles = [
+          ...new Map(
+            allArticles.map(article => [article.id, article])
+          ).values()
+        ];
+      } else {
+        allArticles = publicItems;
+      }
+
+      renderHome();
+
+      if (isAdmin) {
+        renderReviewQueue();
+        renderPublishedManage();
+      }
+    },
+    error => {
+      console.error(
+        "Erro ao carregar notícias públicas do Firestore:",
+        error
+      );
+
+      const grid = $("#newsGrid");
+
+      if (grid) {
+        grid.innerHTML = `
+          <div class="empty-state">
+            Não foi possível carregar as notícias. Confira a conexão,
+            as regras do Firestore e o Console do navegador.
+          </div>
+        `;
+      }
+
+      if ($("#newsCount")) {
+        $("#newsCount").textContent = "Erro ao carregar";
+      }
+
+      showToast(
+        friendlyFirestoreError(error, "carregar as notícias"),
+        6000
+      );
+    }
+  );
+}
+
+// Somente o administrador autorizado consulta a coleção inteira,
+// incluindo rascunhos e matérias em revisão.
+function startAdminListener() {
+  if (unsubscribeAdmin) {
+    unsubscribeAdmin();
+  }
+
+  unsubscribeAdmin = onSnapshot(
+    articlesRef,
+    snapshot => {
+      const adminItems = snapshot.docs.map(item => ({
+        id: item.id,
+        ...item.data()
+      }));
+
+      allArticles = adminItems;
+
+      renderHome();
+      renderReviewQueue();
+      renderPublishedManage();
+    },
+    error => {
+      console.error(
+        "Erro ao carregar painel editorial:",
+        error
+      );
+
+      showToast(
+        friendlyFirestoreError(error, "carregar o painel editorial"),
+        6000
+      );
+    }
+  );
+}
+
+/* =========================================================
+   ESTADO DE AUTENTICAÇÃO
+========================================================= */
+
+function setAdminState(user) {
+  currentUser = user;
+  isAdmin = Boolean(user && user.uid === ADMIN_UID);
+
+  const adminButton = $("#adminBtn");
+
+  if (adminButton) {
+    adminButton.textContent = "Painel ADM";
+  }
+
+  $("#logoutBtn")?.classList.toggle("hidden", !isAdmin);
+
+  if (isAdmin) {
+    $("#adminPanel")?.classList.remove("hidden");
+
+    closeLogin();
+
+    if (unsubscribePublic) {
+      unsubscribePublic();
+      unsubscribePublic = null;
+    }
+
+    if (unsubscribeAdmin) {
+      unsubscribeAdmin();
+      unsubscribeAdmin = null;
+    }
+
+    startAdminListener();
+  } else {
+    $("#adminPanel")?.classList.add("hidden");
+
+    if (unsubscribeAdmin) {
+      unsubscribeAdmin();
+      unsubscribeAdmin = null;
+    }
+
+    startPublicListener();
+
+    // Contas diferentes da conta administrativa não permanecem conectadas.
+    if (user) {
+      signOut(auth).catch(error => {
+        console.error(
+          "Erro ao encerrar sessão não autorizada:",
+          error
+        );
+      });
+    }
+  }
+}
+
+/* =========================================================
+   EVENTOS DA INTERFACE
+========================================================= */
+
+function setupEvents() {
+  $("#adminBtn")?.addEventListener("click", () => {
+    if (isAdmin && currentUser?.uid === ADMIN_UID) {
+      $("#homeView")?.classList.toggle("hidden");
+      $("#adminPanel")?.classList.toggle("hidden");
+      $("#articleView")?.classList.add("hidden");
+    } else {
+      openLogin();
+    }
+  });
+
+  $("#closeLoginBtn")?.addEventListener("click", closeLogin);
+
+  $("#loginOverlay")?.addEventListener("click", event => {
+    if (event.target === $("#loginOverlay")) {
+      closeLogin();
+    }
+  });
+
+  $("#loginForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+
+    setLoginError("");
+
+    const email = $("#adminEmail")?.value.trim();
+    const password = $("#adminPassword")?.value;
+    const button = $("#loginSubmitBtn");
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Entrando...";
+    }
+
+    try {
+      const result = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+
+      if (result.user.uid !== ADMIN_UID) {
+        await signOut(auth);
+
+        setLoginError(
+          "Esta conta não está autorizada como administradora deste portal."
+        );
+      } else {
+        closeLogin();
+
+        showToast(
+          "Login realizado. Carregando painel editorial..."
+        );
+      }
+    } catch (error) {
+      console.error("Erro no login Firebase:", error);
+
+      const messages = {
+        "auth/invalid-email": "O formato do e-mail é inválido.",
+        "auth/invalid-credential": "E-mail ou senha incorretos.",
+        "auth/user-not-found": "Usuário não encontrado no Authentication.",
+        "auth/wrong-password": "E-mail ou senha incorretos.",
+        "auth/too-many-requests": "Muitas tentativas. Tente novamente mais tarde.",
+        "auth/operation-not-allowed": "O login por e-mail/senha não está habilitado no Firebase Authentication.",
+        "auth/api-key-not-valid": "A chave de API foi recusada. Confira a configuração do projeto Firebase."
+      };
+
+      setLoginError(
+        messages[error.code] ||
+        `Não foi possível entrar (${error.code || error.message}).`
+      );
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Entrar";
+      }
+    }
+  });
+
+  $("#logoutBtn")?.addEventListener("click", async () => {
+    try {
+      await signOut(auth);
+
+      showToast("Sessão encerrada.");
+
+      $("#homeView")?.classList.remove("hidden");
+    } catch (error) {
+      console.error("Erro ao sair:", error);
+
+      showToast("Não foi possível encerrar a sessão.");
+    }
+  });
+
+  $("#articleForm")?.addEventListener("submit", event => {
+    saveArticle(event, "published");
+  });
+
+  $("#saveDraftBtn")?.addEventListener("click", () => {
+    saveArticle(null, "draft");
+  });
+
+  $("#cancelEditBtn")?.addEventListener("click", resetArticleForm);
+
+  $("#uploadImageBtn")?.addEventListener("click", () => {
+    $("#uploadImageInput")?.click();
+  });
+
+  $("#uploadVideoBtn")?.addEventListener("click", () => {
+    $("#uploadVideoInput")?.click();
+  });
+
+  $("#uploadImageInput")?.addEventListener("change", event => {
+    uploadInlineFile(event.target.files?.[0], "image");
+  });
+
+  $("#uploadVideoInput")?.addEventListener("change", event => {
+    uploadInlineFile(event.target.files?.[0], "video");
+  });
+
+  $("#insertVideoLinkBtn")?.addEventListener(
+    "click",
+    insertVideoLinkAtCursor
+  );
+
+  $("#articleContent")?.addEventListener(
+    "input",
+    updateInlinePreview
+  );
+
+  $("#inlineMediaList")?.addEventListener("click", event => {
+    const button = event.target.closest("[data-remove-inline-media]");
+
+    if (button) {
+      removeInlineMedia(button.dataset.removeInlineMedia);
+    }
+  });
+
+  document.addEventListener("click", event => {
+    const button = event.target.closest("[data-admin-tab]");
+
+    if (!button) return;
+
+    event.preventDefault();
+
+    setAdminTab(button.dataset.adminTab);
+  });
+
+  $("#reviewQueue")?.addEventListener(
+    "click",
+    handleArticleAction
+  );
+
+  $("#publishedManage")?.addEventListener(
+    "click",
+    handleArticleAction
+  );
+
+  $$("[data-category]").forEach(button => {
+    button.addEventListener("click", () => {
+      activeCategory = button.dataset.category || "all";
+
+      $$("[data-category]").forEach(item => {
+        item.classList.toggle("active", item === button);
+      });
+
+      shownCount = PAGE_SIZE;
+
+      goHome();
+      renderHome();
+    });
+  });
+
+  $("#searchToggle")?.addEventListener("click", () => {
+    $("#searchPanel")?.classList.toggle("hidden");
+
+    if (!$("#searchPanel")?.classList.contains("hidden")) {
+      $("#searchInput")?.focus();
+    }
+  });
+
+  $("#searchInput")?.addEventListener("input", () => {
+    shownCount = PAGE_SIZE;
+    renderHome();
+  });
+
+  $("#clearSearch")?.addEventListener("click", () => {
+    if ($("#searchInput")) {
+      $("#searchInput").value = "";
+    }
+
+    shownCount = PAGE_SIZE;
+    renderHome();
+  });
+
+  $("#loadMoreBtn")?.addEventListener("click", () => {
+    shownCount += PAGE_SIZE;
+    renderHome();
+  });
+
+  document.addEventListener("click", event => {
+    const link = event.target.closest("[data-open-article]");
+
+    if (link) {
+      event.preventDefault();
+      openArticle(link.dataset.openArticle);
+      return;
+    }
+
+    if (event.target.closest("[data-home]")) {
+      event.preventDefault();
+      goHome();
+    }
+  });
+
+  window.addEventListener("hashchange", () => {
+    const match = location.hash.match(/^#artigo\/(.+)$/);
+
+    if (match) {
+      openArticle(decodeURIComponent(match[1]));
+    } else {
+      goHome();
+    }
+  });
+}
+
+/* =========================================================
+   INICIALIZAÇÃO
+========================================================= */
+
+function initialize() {
+  setupEvents();
+
+  // A leitura pública é iniciada independentemente do login.
+  startPublicListener();
+
+  onAuthStateChanged(
+    auth,
+    user => setAdminState(user),
+    error => {
+      console.error(
+        "Erro no estado de autenticação:",
+        error
+      );
+
+      showToast(
+        "Não foi possível verificar a sessão administrativa. Veja o Console.",
+        6000
+      );
+    }
+  );
+
+  const match = location.hash.match(/^#artigo\/(.+)$/);
+
+  if (match) {
+    setTimeout(() => {
+      openArticle(decodeURIComponent(match[1]));
+    }, 300);
+  }
+}
+
+try {
+  if (document.readyState === "loading") {
+    document.addEventListener(
+      "DOMContentLoaded",
+      initialize,
+      { once: true }
+    );
+  } else {
+    initialize();
+  }
+} catch (error) {
+  console.error("Falha ao iniciar o Rift Diário:", error);
+
+  showToast(
+    "O site encontrou um erro ao iniciar. Abra o Console para ver os detalhes.",
+    6000
+  );
+}
