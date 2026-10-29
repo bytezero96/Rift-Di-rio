@@ -1,10 +1,12 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+
 import {
   getAuth,
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+
 import {
   getFirestore,
   collection,
@@ -17,6 +19,7 @@ import {
   where,
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
 import {
   getStorage,
   ref as storageRef,
@@ -26,6 +29,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
 /* CONFIGURAÇÃO DO RIFT DIÁRIO */
+
 const firebaseConfig = {
   apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
   authDomain: "duelosrankeadoswr.firebaseapp.com",
@@ -75,6 +79,15 @@ function escapeHTML(value) {
   })[character]);
 }
 
+/*
+ * CAIXAS DE INFORMAÇÃO
+ *
+ * A mensagem desaparece automaticamente.
+ * O temporizador anterior é cancelado quando uma nova mensagem aparece.
+ * Ao terminar, o elemento também recebe display:none para não ficar preso
+ * na tela caso o CSS não remova corretamente a caixa.
+ */
+
 function showToast(message, duration = 3500) {
   const toast = $("#toast");
 
@@ -83,14 +96,46 @@ function showToast(message, duration = 3500) {
     return;
   }
 
-  toast.textContent = message;
+  if (toastTimer !== null) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+
+  toast.classList.remove("show");
+  toast.style.removeProperty("display");
+
+  toast.textContent = String(message ?? "");
+
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
+
   toast.classList.add("show");
 
-  clearTimeout(toastTimer);
+  const visibleDuration = Math.max(
+    1000,
+    Number(duration) || 3500
+  );
 
   toastTimer = setTimeout(() => {
     toast.classList.remove("show");
-  }, duration);
+    toast.style.setProperty("display", "none");
+    toastTimer = null;
+  }, visibleDuration);
+}
+
+function hideToast() {
+  const toast = $("#toast");
+
+  if (toastTimer !== null) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+
+  if (toast) {
+    toast.classList.remove("show");
+    toast.style.setProperty("display", "none");
+    toast.textContent = "";
+  }
 }
 
 function setLoginError(message = "") {
@@ -128,13 +173,16 @@ function articleDate(article) {
 
 function sortNewest(items) {
   return [...items].sort((a, b) => {
-    const dateA = articleDate(a)?.toDate
-      ? articleDate(a).toDate().getTime()
-      : new Date(articleDate(a) || 0).getTime();
+    const valueA = articleDate(a);
+    const valueB = articleDate(b);
 
-    const dateB = articleDate(b)?.toDate
-      ? articleDate(b).toDate().getTime()
-      : new Date(articleDate(b) || 0).getTime();
+    const dateA = valueA?.toDate
+      ? valueA.toDate().getTime()
+      : new Date(valueA || 0).getTime();
+
+    const dateB = valueB?.toDate
+      ? valueB.toDate().getTime()
+      : new Date(valueB || 0).getTime();
 
     return dateB - dateA;
   });
@@ -829,7 +877,12 @@ function resetArticleForm() {
   }
 
   $("#cancelEditBtn")?.classList.add("hidden");
-  $("#articleContent").innerHTML = "";
+
+  const editor = $("#articleContent");
+
+  if (editor) {
+    editor.innerHTML = "";
+  }
 
   currentArticleId = null;
   inlineMediaDraft = [];
@@ -992,6 +1045,7 @@ async function uploadInlineFile(file, type) {
         : "Use um vídeo MP4, WEBM, OGG ou MOV.",
       5000
     );
+
     return;
   }
 
@@ -1006,6 +1060,7 @@ async function uploadInlineFile(file, type) {
         : "O vídeo deve ter no máximo 150 MB.",
       5000
     );
+
     return;
   }
 
@@ -1128,6 +1183,7 @@ function insertVideoLinkAtCursor() {
       "Link não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou um link direto MP4/WebM/OGG.",
       6000
     );
+
     return;
   }
 
@@ -1203,7 +1259,6 @@ function articleFromForm(status, existingArticle = null) {
     category: $("#articleCategory").value,
     image: $("#articleImage").value.trim(),
 
-    // Preserva links de vídeo antigos que já estejam salvos na matéria.
     videoUrl: existingArticle?.videoUrl || existingArticle?.video || "",
 
     content,
@@ -1220,7 +1275,8 @@ function articleFromForm(status, existingArticle = null) {
     status,
     updatedAt: serverTimestamp(),
 
-    ...(status === "published" && !existingArticle?.publishedAt
+    ...(status === "published" &&
+    existingArticle?.status !== "published"
       ? { publishedAt: serverTimestamp() }
       : {})
   };
@@ -1235,7 +1291,6 @@ async function saveArticle(event, status) {
 
   const form = $("#articleForm");
 
-  // Rascunhos podem ser salvos incompletos.
   if (status === "published" && !form.reportValidity()) {
     return;
   }
@@ -1259,6 +1314,7 @@ async function saveArticle(event, status) {
     showToast(
       "Para publicar, preencha o título, o resumo e o conteúdo da matéria."
     );
+
     return;
   }
 
@@ -1305,7 +1361,6 @@ async function saveArticle(event, status) {
       );
     }
 
-    // Limpa arquivos que foram enviados, mas retirados do texto antes de salvar.
     const previousMedia = [
       ...(existingArticle?.inlineMedia || []),
       ...inlineMediaDraft
@@ -1503,7 +1558,7 @@ async function handleArticleAction(event) {
         updatedAt: serverTimestamp()
       };
 
-      if (!article.publishedAt) {
+      if (article.status !== "published" || !article.publishedAt) {
         payload.publishedAt = serverTimestamp();
       }
 
@@ -1724,6 +1779,7 @@ function applyEditorCommand(command) {
         showToast(
           "Link inválido. Use um endereço que comece com https:// ou http://."
         );
+
         return;
       }
 
@@ -1747,14 +1803,12 @@ function applyEditorCommand(command) {
 /* EVENTOS */
 
 function setupEvents() {
-  // Mantém o HTML atual e simplifica o nome da aba.
   const draftsTab = $('[data-admin-tab="review"]');
 
   if (draftsTab && draftsTab.querySelector(".tiny-count")) {
     draftsTab.firstChild.textContent = "Rascunhos ";
   }
 
-  // Adiciona o campo de vídeo por link sem exigir alteração do HTML.
   const editorHint = $(".editor-hint");
 
   if (editorHint && !$("#articleInlineVideoUrl")) {
@@ -1836,7 +1890,7 @@ function setupEvents() {
         );
       } else {
         closeLogin();
-        showToast("Login realizado.");
+        // A mensagem "Login realizado." foi removida.
       }
     } catch (error) {
       console.error("Erro no login Firebase:", error);
@@ -2087,6 +2141,10 @@ function setupEvents() {
 
 function initialize() {
   setupEvents();
+
+  // Esconde uma caixa que eventualmente tenha ficado aberta
+  // após uma atualização ou navegação anterior.
+  hideToast();
 
   onAuthStateChanged(
     auth,
