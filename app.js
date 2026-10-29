@@ -21,10 +21,11 @@ import {
   getStorage,
   ref as storageRef,
   uploadBytesResumable,
-  getDownloadURL
+  getDownloadURL,
+  deleteObject
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-storage.js";
 
-/* Rift Diário — configuração original preservada */
+/* CONFIGURAÇÃO DO RIFT DIÁRIO */
 const firebaseConfig = {
   apiKey: "AIzaSyBJrLkfW9aAVJnrcB7hvYFbsJURBGjQU8M",
   authDomain: "duelosrankeadoswr.firebaseapp.com",
@@ -37,41 +38,41 @@ const firebaseConfig = {
 
 const ADMIN_UID = "U7ohORMjr1O9Ubby2WFMztAe8Au2";
 
-const $ = (selector, root = document) => root.querySelector(selector);
-const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 const articlesRef = collection(db, "articles");
 
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+const PAGE_SIZE = 9;
+
 let currentUser = null;
 let isAdmin = false;
 let allArticles = [];
 let visibleArticles = [];
 let activeCategory = "all";
-let activeAdminTab = "editor";
+let shownCount = PAGE_SIZE;
 let currentArticleId = null;
 let inlineMediaDraft = [];
+let editorSavedRange = null;
 let uploadInProgress = false;
 let unsubscribePublic = null;
 let unsubscribeAdmin = null;
 let toastTimer = null;
 
-const PAGE_SIZE = 9;
-let shownCount = PAGE_SIZE;
-
 /* UTILITÁRIOS */
 
 function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, char => ({
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#039;"
-  })[char]);
+  })[character]);
 }
 
 function showToast(message, duration = 3500) {
@@ -94,7 +95,10 @@ function showToast(message, duration = 3500) {
 
 function setLoginError(message = "") {
   const element = $("#loginError");
-  if (element) element.textContent = message;
+
+  if (element) {
+    element.textContent = message;
+  }
 }
 
 function formatDate(value) {
@@ -113,6 +117,35 @@ function formatDate(value) {
     month: "short",
     year: "numeric"
   }).format(date);
+}
+
+function articleDate(article) {
+  return article.publishedAt ||
+    article.updatedAt ||
+    article.createdAt ||
+    null;
+}
+
+function sortNewest(items) {
+  return [...items].sort((a, b) => {
+    const dateA = articleDate(a)?.toDate
+      ? articleDate(a).toDate().getTime()
+      : new Date(articleDate(a) || 0).getTime();
+
+    const dateB = articleDate(b)?.toDate
+      ? articleDate(b).toDate().getTime()
+      : new Date(articleDate(b) || 0).getTime();
+
+    return dateB - dateA;
+  });
+}
+
+function normalized(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 }
 
 function gameLabel(game) {
@@ -135,59 +168,62 @@ function categoryLabel(category) {
   })[category] || category || "Notícias";
 }
 
-function articleDate(article) {
-  return article.publishedAt || article.updatedAt || article.createdAt || null;
+function friendlyFirestoreError(error, action) {
+  if (error?.code === "permission-denied") {
+    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
+  }
+
+  if (error?.code === "unavailable") {
+    return "O Firebase está indisponível. Confira a conexão e tente novamente.";
+  }
+
+  if (error?.code === "failed-precondition") {
+    return "O Firestore informou uma pré-condição ausente. Veja o Console do navegador.";
+  }
+
+  return `Não foi possível ${action}. Código: ${error?.code || error?.message || "erro desconhecido"}.`;
 }
 
-function sortNewest(list) {
-  return [...list].sort((a, b) => {
-    const dateA = articleDate(a)?.toDate
-      ? articleDate(a).toDate().getTime()
-      : new Date(articleDate(a) || 0).getTime();
+function requireAdmin() {
+  if (!currentUser || currentUser.uid !== ADMIN_UID || !isAdmin) {
+    showToast("Entre com a conta autorizada para administrar as matérias.");
+    openLogin();
+    return false;
+  }
 
-    const dateB = articleDate(b)?.toDate
-      ? articleDate(b).toDate().getTime()
-      : new Date(articleDate(b) || 0).getTime();
-
-    return dateB - dateA;
-  });
+  return true;
 }
 
-function normalized(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-/* SANITIZAÇÃO DE HTML */
+/* LIMPEZA DO HTML DO EDITOR */
 
 function sanitizeArticleHTML(html) {
-  const parser = new DOMParser();
-  const parsed = parser.parseFromString(String(html ?? ""), "text/html");
+  const parsed = new DOMParser().parseFromString(
+    String(html ?? ""),
+    "text/html"
+  );
 
   const allowedTags = new Set([
     "P", "BR", "STRONG", "B", "EM", "I", "U", "S",
     "H2", "H3", "H4", "UL", "OL", "LI", "BLOCKQUOTE",
     "A", "IMG", "FIGURE", "FIGCAPTION", "TABLE",
     "THEAD", "TBODY", "TR", "TH", "TD", "HR", "CODE",
-    "PRE", "DIV", "SPAN", "SECTION", "SMALL", "SUB",
-    "SUP", "MARK"
+    "PRE", "DIV", "SPAN", "SMALL", "SUB", "SUP", "MARK"
   ]);
 
   const allowedAttrs = new Set([
     "href", "src", "alt", "title", "target", "rel",
-    "width", "height", "loading"
+    "width", "height", "loading", "style"
   ]);
 
-  function safeUrl(value, image = false) {
+  function safeUrl(value, isImage = false) {
     const raw = String(value || "").trim();
 
-    if (!raw) return "";
+    if (!raw) {
+      return "";
+    }
 
     if (
-      image &&
+      isImage &&
       /^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)
     ) {
       return raw;
@@ -211,7 +247,9 @@ function sanitizeArticleHTML(html) {
         continue;
       }
 
-      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        continue;
+      }
 
       const tag = node.tagName;
 
@@ -230,25 +268,39 @@ function sanitizeArticleHTML(html) {
         continue;
       }
 
-      for (const attr of [...node.attributes]) {
-        const name = attr.name.toLowerCase();
+      for (const attribute of [...node.attributes]) {
+        const name = attribute.name.toLowerCase();
 
         if (!allowedAttrs.has(name)) {
-          node.removeAttribute(attr.name);
-        } else if (name === "href") {
-          const url = safeUrl(attr.value);
+          node.removeAttribute(attribute.name);
+        } else if (name === "href" || name === "src") {
+          const url = safeUrl(
+            attribute.value,
+            name === "src"
+          );
 
-          if (url) node.setAttribute("href", url);
-          else node.removeAttribute("href");
-        } else if (name === "src") {
-          const url = safeUrl(attr.value, true);
+          if (url) {
+            node.setAttribute(name, url);
+          } else {
+            node.removeAttribute(attribute.name);
+          }
+        } else if (name === "style") {
+          const match = attribute.value.match(
+            /(?:^|;)\s*color\s*:\s*(#[0-9a-f]{3,8}|rgba?\([0-9.,%\s]+\)|[a-z]{1,20})\s*(?:;|$)/i
+          );
 
-          if (url) node.setAttribute("src", url);
-          else node.removeAttribute("src");
+          if (match) {
+            node.setAttribute("style", `color: ${match[1]};`);
+          } else {
+            node.removeAttribute("style");
+          }
         }
       }
 
-      if (tag === "A" && node.getAttribute("target") === "_blank") {
+      if (
+        tag === "A" &&
+        node.getAttribute("target") === "_blank"
+      ) {
         node.setAttribute("rel", "noopener noreferrer");
       }
 
@@ -261,16 +313,19 @@ function sanitizeArticleHTML(html) {
   }
 
   clean(parsed.body);
+
   return parsed.body.innerHTML;
 }
 
 function renderContentSegment(value) {
   const text = String(value || "").trim();
 
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
 
   const hasHTML =
-    /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code|div|span|section|small|sub|sup|mark)\b[^>]*>/i
+    /<\s*(p|br|strong|b|em|i|u|s|h[2-4]|ul|ol|li|blockquote|a|img|figure|table|hr|pre|code|div|span|small|sub|sup|mark)\b[^>]*>/i
       .test(text);
 
   if (hasHTML) {
@@ -289,7 +344,210 @@ function renderContentSegment(value) {
     .join("");
 }
 
-/* CARTÕES E PÁGINA INICIAL */
+/* VÍDEOS */
+
+function buildVideoEmbed(rawUrl) {
+  const value = String(rawUrl || "").trim();
+
+  if (!value) {
+    return "";
+  }
+
+  let url;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return "";
+  }
+
+  if (!["https:", "http:"].includes(url.protocol)) {
+    return "";
+  }
+
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const parts = url.pathname.split("/").filter(Boolean);
+  const parent = location.hostname || "localhost";
+
+  let src = "";
+
+  if ([
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com"
+  ].includes(host)) {
+    let id = url.searchParams.get("v");
+
+    if (
+      !id &&
+      ["shorts", "live", "embed", "v"].includes(parts[0])
+    ) {
+      id = parts[1];
+    }
+
+    if (!id || !/^[\w-]{11}$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  } else if (host === "youtu.be") {
+    const id = parts[0];
+
+    if (!id || !/^[\w-]{11}$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
+  } else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
+    const id =
+      host === "player.vimeo.com" && parts[0] === "video"
+        ? parts[1]
+        : parts[parts.length - 1];
+
+    if (!id || !/^\d+$/.test(id)) {
+      return "";
+    }
+
+    src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
+  } else if (["dailymotion.com", "dai.ly"].includes(host)) {
+    let id = "";
+
+    if (host === "dai.ly") {
+      id = parts[0];
+    } else if (parts[0] === "video") {
+      id = (parts[1] || "").split("_")[0];
+    } else if (parts[0] === "embed" && parts[1] === "video") {
+      id = parts[2];
+    }
+
+    if (!id || !/^[A-Za-z0-9]+$/.test(id)) {
+      return "";
+    }
+
+    src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
+  } else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
+    if (host === "clips.twitch.tv") {
+      if (!parts[0]) {
+        return "";
+      }
+
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(parts[0])}&parent=${encodeURIComponent(parent)}`;
+    } else if (
+      parts[0] === "videos" &&
+      /^\d+$/.test(parts[1] || "")
+    ) {
+      src = `https://player.twitch.tv/?video=v${encodeURIComponent(parts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (parts[0] === "clip" && parts[1]) {
+      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(parts[1])}&parent=${encodeURIComponent(parent)}`;
+    } else if (
+      parts[0] &&
+      ![
+        "directory", "downloads", "jobs", "p",
+        "search", "settings", "turbo"
+      ].includes(parts[0].toLowerCase())
+    ) {
+      src = `https://player.twitch.tv/?channel=${encodeURIComponent(parts[0])}&parent=${encodeURIComponent(parent)}`;
+    } else {
+      return "";
+    }
+  } else if (["kick.com", "player.kick.com"].includes(host)) {
+    const channel = parts[0];
+
+    if (
+      !channel ||
+      ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())
+    ) {
+      return "";
+    }
+
+    src = `https://player.kick.com/${encodeURIComponent(channel)}`;
+  } else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
+    return `
+      <div class="article-video">
+        <video controls playsinline preload="metadata">
+          <source src="${escapeHTML(url.href)}">
+          Seu navegador não conseguiu reproduzir este vídeo.
+        </video>
+      </div>
+    `;
+  } else {
+    return "";
+  }
+
+  return `
+    <div class="article-video">
+      <iframe
+        src="${escapeHTML(src)}"
+        title="Vídeo da matéria"
+        loading="lazy"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allowfullscreen
+      ></iframe>
+    </div>
+  `;
+}
+
+function renderArticleBody(content, media = []) {
+  const mediaById = new Map(
+    (Array.isArray(media) ? media : []).map(item => [item.id, item])
+  );
+
+  const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
+  const source = String(content || "");
+
+  let html = "";
+  let cursor = 0;
+  let match;
+
+  while ((match = markerPattern.exec(source)) !== null) {
+    html += renderContentSegment(
+      source.slice(cursor, match.index)
+    );
+
+    const item = mediaById.get(match[1]);
+
+    if (item?.url) {
+      if (item.type === "image") {
+        html += `
+          <figure class="article-inline-media">
+            <img
+              src="${escapeHTML(item.url)}"
+              alt="${escapeHTML(item.caption || "Imagem da matéria")}"
+              loading="lazy"
+            >
+            ${item.caption ? `<figcaption>${escapeHTML(item.caption)}</figcaption>` : ""}
+          </figure>
+        `;
+      } else if (item.type === "video-upload") {
+        html += `
+          <div class="article-video article-inline-media">
+            <video controls playsinline preload="metadata">
+              <source src="${escapeHTML(item.url)}">
+              Seu navegador não conseguiu reproduzir este vídeo.
+            </video>
+            ${item.caption ? `<p class="media-caption">${escapeHTML(item.caption)}</p>` : ""}
+          </div>
+        `;
+      } else {
+        html += buildVideoEmbed(item.url);
+
+        if (item.caption) {
+          html += `<p class="media-caption">${escapeHTML(item.caption)}</p>`;
+        }
+      }
+    }
+
+    cursor = markerPattern.lastIndex;
+  }
+
+  html += renderContentSegment(source.slice(cursor));
+
+  return html;
+}
+
+/* PÁGINA INICIAL */
 
 function articleCard(article) {
   const image = article.image
@@ -325,9 +583,16 @@ function renderHome() {
   const search = normalized($("#searchInput")?.value || "");
 
   visibleArticles = published.filter(article => {
+    const matchesGame =
+      article.game === activeCategory ||
+      (
+        article.game === "both" &&
+        ["wild-rift", "lol-pc"].includes(activeCategory)
+      );
+
     const matchesCategory =
       activeCategory === "all" ||
-      article.game === activeCategory ||
+      matchesGame ||
       article.category === activeCategory;
 
     const haystack = normalized(
@@ -387,214 +652,26 @@ function renderHome() {
   }
 
   if (grid) {
-    grid.innerHTML = !visibleArticles.length
-      ? `<div class="empty-state">${
-          search
+    grid.innerHTML = visibleArticles.length
+      ? visibleArticles.slice(0, shownCount).map(articleCard).join("")
+      : `
+        <div class="empty-state">
+          ${search
             ? "Nenhuma notícia corresponde à busca."
-            : "Ainda não há notícias publicadas nesta categoria."
-        }</div>`
-      : visibleArticles.slice(0, shownCount).map(articleCard).join("");
+            : "Ainda não há notícias publicadas nesta categoria."}
+        </div>
+      `;
   }
 
   if (loadMore) {
-    loadMore.classList.toggle("hidden", visibleArticles.length <= shownCount);
+    loadMore.classList.toggle(
+      "hidden",
+      visibleArticles.length <= shownCount
+    );
   }
 }
 
-/* PLAYERS DE VÍDEO */
-
-function buildVideoEmbed(rawUrl) {
-  const value = String(rawUrl || "").trim();
-
-  if (!value) return "";
-
-  let url;
-
-  try {
-    url = new URL(value);
-  } catch {
-    return "";
-  }
-
-  if (!["https:", "http:"].includes(url.protocol)) return "";
-
-  const host = url.hostname.toLowerCase().replace(/^www\./, "");
-  const pathParts = url.pathname.split("/").filter(Boolean);
-
-  let src = "";
-  const parent = location.hostname || "localhost";
-
-  // YouTube: links comuns, Shorts, lives e links de incorporação.
-  if ([
-    "youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtube-nocookie.com"
-  ].includes(host)) {
-    let id = url.searchParams.get("v");
-
-    if (!id && ["shorts", "live", "embed", "v"].includes(pathParts[0])) {
-      id = pathParts[1];
-    }
-
-    if (!id || !/^[\w-]{11}$/.test(id)) return "";
-
-    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
-  } else if (host === "youtu.be") {
-    const id = pathParts[0];
-
-    if (!id || !/^[\w-]{11}$/.test(id)) return "";
-
-    src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?rel=0`;
-  }
-
-  // Vimeo.
-  else if (["vimeo.com", "player.vimeo.com"].includes(host)) {
-    const id =
-      host === "player.vimeo.com" && pathParts[0] === "video"
-        ? pathParts[1]
-        : pathParts[pathParts.length - 1];
-
-    if (!id || !/^\d+$/.test(id)) return "";
-
-    src = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
-  }
-
-  // Dailymotion.
-  else if (["dailymotion.com", "dai.ly"].includes(host)) {
-    let id = "";
-
-    if (host === "dai.ly") {
-      id = pathParts[0] || "";
-    } else if (pathParts[0] === "video") {
-      id = (pathParts[1] || "").split("_")[0];
-    } else if (pathParts[0] === "embed" && pathParts[1] === "video") {
-      id = pathParts[2] || "";
-    }
-
-    if (!id || !/^[A-Za-z0-9]+$/.test(id)) return "";
-
-    src = `https://www.dailymotion.com/embed/video/${encodeURIComponent(id)}`;
-  }
-
-  // Twitch.
-  else if (["twitch.tv", "clips.twitch.tv"].includes(host)) {
-    if (host === "clips.twitch.tv") {
-      const slug = pathParts[0];
-
-      if (!slug) return "";
-
-      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(slug)}&parent=${encodeURIComponent(parent)}`;
-    } else if (pathParts[0] === "videos" && /^\d+$/.test(pathParts[1] || "")) {
-      src = `https://player.twitch.tv/?video=v${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
-    } else if (pathParts[0] === "clip" && pathParts[1]) {
-      src = `https://clips.twitch.tv/embed?clip=${encodeURIComponent(pathParts[1])}&parent=${encodeURIComponent(parent)}`;
-    } else if (
-      pathParts[0] &&
-      !["directory", "downloads", "jobs", "p", "search", "settings", "turbo"].includes(pathParts[0].toLowerCase())
-    ) {
-      src = `https://player.twitch.tv/?channel=${encodeURIComponent(pathParts[0])}&parent=${encodeURIComponent(parent)}`;
-    } else {
-      return "";
-    }
-  }
-
-  // Kick.
-  else if (["kick.com", "player.kick.com"].includes(host)) {
-    const channel = pathParts[0];
-
-    if (!channel || ["categories", "videos", "clips", "search"].includes(channel.toLowerCase())) {
-      return "";
-    }
-
-    src = `https://player.kick.com/${encodeURIComponent(channel)}`;
-  }
-
-  // Vídeo hospedado diretamente em um endereço MP4, WebM ou OGG.
-  else if (/\.(mp4|webm|ogv|ogg)$/i.test(url.pathname)) {
-    return `
-      <div class="article-video">
-        <video controls playsinline preload="metadata">
-          <source src="${escapeHTML(url.href)}">
-          Seu navegador não conseguiu reproduzir este vídeo.
-        </video>
-      </div>
-    `;
-  } else {
-    return "";
-  }
-
-  return `
-    <div class="article-video">
-      <iframe
-        src="${escapeHTML(src)}"
-        title="Vídeo da matéria"
-        loading="lazy"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        referrerpolicy="strict-origin-when-cross-origin"
-        allowfullscreen
-      ></iframe>
-    </div>
-  `;
-}
-
-function renderArticleBody(content, media = []) {
-  const byId = new Map(
-    (Array.isArray(media) ? media : []).map(item => [item.id, item])
-  );
-
-  const markerPattern = /\[\[MEDIA:([a-zA-Z0-9_-]+)\]\]/g;
-  const source = String(content || "");
-
-  let html = "";
-  let cursor = 0;
-  let match;
-
-  while ((match = markerPattern.exec(source)) !== null) {
-    html += renderContentSegment(source.slice(cursor, match.index));
-
-    const item = byId.get(match[1]);
-
-    if (item?.url) {
-      if (item.type === "image") {
-        html += `
-          <figure class="article-inline-media">
-            <img
-              src="${escapeHTML(item.url)}"
-              alt="${escapeHTML(item.caption || "Imagem da matéria")}"
-              loading="lazy"
-            >
-            ${item.caption ? `<figcaption>${escapeHTML(item.caption)}</figcaption>` : ""}
-          </figure>
-        `;
-      } else if (item.type === "video-upload") {
-        html += `
-          <div class="article-video article-inline-media">
-            <video controls playsinline preload="metadata">
-              <source src="${escapeHTML(item.url)}">
-              Seu navegador não conseguiu reproduzir este vídeo.
-            </video>
-            ${item.caption ? `<p class="media-caption">${escapeHTML(item.caption)}</p>` : ""}
-          </div>
-        `;
-      } else {
-        html += buildVideoEmbed(item.url);
-
-        if (item.caption) {
-          html += `<p class="media-caption">${escapeHTML(item.caption)}</p>`;
-        }
-      }
-    }
-
-    cursor = markerPattern.lastIndex;
-  }
-
-  html += renderContentSegment(source.slice(cursor));
-
-  return html;
-}
-
-/* NAVEGAÇÃO E MATÉRIAS */
+/* ABRIR MATÉRIA */
 
 function openArticle(id) {
   const article = allArticles.find(
@@ -610,26 +687,38 @@ function openArticle(id) {
   $("#adminPanel")?.classList.add("hidden");
 
   const view = $("#articleView");
-  if (!view) return;
+
+  if (!view) {
+    return;
+  }
 
   view.classList.remove("hidden");
 
   const inlineBody = renderArticleBody(
     article.content || "",
-    Array.isArray(article.inlineMedia) ? article.inlineMedia : []
+    article.inlineMedia || []
   );
 
   view.innerHTML = `
-    <a href="#inicio" class="back-link" data-home>← Voltar às notícias</a>
+    <a href="#inicio" class="back-link" data-home>
+      ← Voltar às notícias
+    </a>
 
     <header class="article-header">
       <span class="tag">
         ${escapeHTML(categoryLabel(article.category))} ·
         ${escapeHTML(gameLabel(article.game))}
       </span>
+
       <h1>${escapeHTML(article.title)}</h1>
-      <p class="article-summary">${escapeHTML(article.summary)}</p>
-      <div class="meta">${escapeHTML(formatDate(articleDate(article)))}</div>
+
+      <p class="article-summary">
+        ${escapeHTML(article.summary)}
+      </p>
+
+      <div class="meta">
+        ${escapeHTML(formatDate(articleDate(article)))}
+      </div>
     </header>
 
     ${
@@ -640,28 +729,41 @@ function openArticle(id) {
 
     ${buildVideoEmbed(article.videoUrl || article.video || "")}
 
-    <div class="article-content">${inlineBody}</div>
+    <div class="article-content">
+      ${inlineBody}
+    </div>
 
     <p class="source-note">
       Conteúdo do Rift Diário. Imagens e materiais de terceiros pertencem aos seus respectivos titulares.
     </p>
   `;
 
-  history.replaceState(null, "", `#artigo/${encodeURIComponent(id)}`);
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  history.replaceState(
+    null,
+    "",
+    `#artigo/${encodeURIComponent(id)}`
+  );
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
 
 function goHome() {
   $("#articleView")?.classList.add("hidden");
+  $("#adminPanel")?.classList.add("hidden");
   $("#homeView")?.classList.remove("hidden");
 
-  if (!isAdmin) {
-    $("#adminPanel")?.classList.add("hidden");
-  }
-
   history.replaceState(null, "", "#inicio");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+  });
 }
+
+/* LOGIN ADMINISTRATIVO */
 
 function openLogin() {
   const overlay = $("#loginOverlay");
@@ -682,24 +784,12 @@ function closeLogin() {
   setLoginError("");
 }
 
-function requireAdmin() {
-  if (!currentUser || currentUser.uid !== ADMIN_UID || !isAdmin) {
-    showToast("Entre com a conta autorizada para administrar as matérias.");
-    openLogin();
-    return false;
-  }
-
-  return true;
-}
-
-/* PAINEL ADMINISTRATIVO */
+/* PAINEL */
 
 function setAdminTab(tab) {
-  const validTabs = ["editor", "review", "manage"];
-
-  if (!validTabs.includes(tab)) return;
-
-  activeAdminTab = tab;
+  if (!["editor", "review", "manage"].includes(tab)) {
+    return;
+  }
 
   const panels = {
     editor: $("#editorTab"),
@@ -715,35 +805,44 @@ function setAdminTab(tab) {
   });
 
   Object.entries(panels).forEach(([name, panel]) => {
-    if (panel) panel.classList.toggle("hidden", name !== tab);
+    panel?.classList.toggle("hidden", name !== tab);
   });
 
-  if (tab === "review") renderReviewQueue();
-  if (tab === "manage") renderPublishedManage();
+  if (tab === "review") {
+    renderDraftsList();
+  }
+
+  if (tab === "manage") {
+    renderPublishedManage();
+  }
 }
 
 function resetArticleForm() {
   $("#articleForm")?.reset();
 
-  if ($("#editingId")) $("#editingId").value = "";
+  if ($("#editingId")) {
+    $("#editingId").value = "";
+  }
 
   if ($("#saveArticleBtn")) {
     $("#saveArticleBtn").textContent = "Publicar matéria";
   }
 
   $("#cancelEditBtn")?.classList.add("hidden");
+  $("#articleContent").innerHTML = "";
 
   currentArticleId = null;
   inlineMediaDraft = [];
-
-  renderInlineMediaManager();
-  updateInlinePreview();
+  editorSavedRange = null;
+  uploadInProgress = false;
 }
 
 function fillEditor(id) {
   const article = allArticles.find(item => item.id === id);
 
-  if (!article) return;
+  if (!article) {
+    return;
+  }
 
   currentArticleId = id;
 
@@ -754,18 +853,13 @@ function fillEditor(id) {
   $("#articleCategory").value = article.category || "atualizacoes";
   $("#articleImage").value = article.image || "";
 
-  if ($("#articleVideoUrl")) {
-    $("#articleVideoUrl").value = article.videoUrl || article.video || "";
-  }
-
-  $("#articleContent").value = article.content || "";
+  $("#articleContent").innerHTML = sanitizeArticleHTML(
+    article.content || ""
+  );
 
   inlineMediaDraft = Array.isArray(article.inlineMedia)
     ? article.inlineMedia.map(item => ({ ...item }))
     : [];
-
-  renderInlineMediaManager();
-  updateInlinePreview();
 
   $("#saveArticleBtn").textContent =
     article.status === "published"
@@ -782,83 +876,92 @@ function fillEditor(id) {
   });
 }
 
-/* INSERÇÃO DE IMAGENS E VÍDEOS */
+/* INSERÇÃO DE MÍDIAS NO CURSOR */
+
+function saveEditorRange() {
+  const editor = $("#articleContent");
+  const selection = window.getSelection();
+
+  if (!editor || !selection || selection.rangeCount === 0) {
+    return;
+  }
+
+  const range = selection.getRangeAt(0);
+
+  if (
+    editor.contains(range.commonAncestorContainer) ||
+    range.commonAncestorContainer === editor
+  ) {
+    editorSavedRange = range.cloneRange();
+  }
+}
+
+function restoreEditorRange() {
+  const editor = $("#articleContent");
+
+  if (!editor) {
+    return null;
+  }
+
+  editor.focus({ preventScroll: true });
+
+  const selection = window.getSelection();
+
+  if (!selection) {
+    return null;
+  }
+
+  let range = editorSavedRange;
+
+  if (
+    !range ||
+    !(
+      editor.contains(range.commonAncestorContainer) ||
+      range.commonAncestorContainer === editor
+    )
+  ) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  selection.removeAllRanges();
+  selection.addRange(range);
+
+  return range;
+}
 
 function insertMarkerAtCursor(id) {
-  const field = $("#articleContent");
+  const editor = $("#articleContent");
+  const range = restoreEditorRange();
 
-  if (!field) return;
+  if (!editor || !range) {
+    return;
+  }
 
-  const marker = `\n\n[[MEDIA:${id}]]\n\n`;
+  const marker = document.createTextNode(`[[MEDIA:${id}]]`);
 
-  const start = Number.isInteger(field.selectionStart)
-    ? field.selectionStart
-    : field.value.length;
+  range.deleteContents();
+  range.insertNode(marker);
+  range.setStartAfter(marker);
+  range.collapse(true);
 
-  const end = Number.isInteger(field.selectionEnd)
-    ? field.selectionEnd
-    : field.value.length;
+  const selection = window.getSelection();
 
-  field.value =
-    field.value.slice(0, start) +
-    marker +
-    field.value.slice(end);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 
-  const cursor = start + marker.length;
+  editorSavedRange = range.cloneRange();
 
-  field.focus();
-  field.setSelectionRange(cursor, cursor);
-
-  updateInlinePreview();
+  editor.dispatchEvent(
+    new Event("input", { bubbles: true })
+  );
 }
-
-function renderInlineMediaManager() {
-  const host = $("#inlineMediaList");
-
-  if (!host) return;
-
-  host.innerHTML = inlineMediaDraft.length
-    ? inlineMediaDraft.map(item => `
-        <div class="inline-media-item">
-          <span class="inline-media-kind">
-            ${
-              item.type === "image"
-                ? "IMAGEM"
-                : item.type === "video-upload"
-                  ? "VÍDEO ENVIADO"
-                  : "VÍDEO POR LINK"
-            }
-          </span>
-          <span class="inline-media-name">
-            ${escapeHTML(item.caption || item.name || item.url)}
-          </span>
-          <button
-            type="button"
-            class="text-btn"
-            data-remove-inline-media="${escapeHTML(item.id)}"
-          >Remover</button>
-        </div>
-      `).join("")
-    : `<p class="form-hint">Nenhuma mídia inserida no corpo da matéria.</p>`;
-}
-
-function updateInlinePreview() {
-  const host = $("#inlineMediaPreview");
-
-  if (!host) return;
-
-  const content = $("#articleContent")?.value || "";
-
-  host.innerHTML =
-    renderArticleBody(content, inlineMediaDraft) ||
-    `<p class="form-hint">A prévia da matéria com mídias aparecerá aqui.</p>`;
-}
-
-/* UPLOAD COM PROGRESSO E TRATAMENTO DE ERROS */
 
 async function uploadInlineFile(file, type) {
-  if (!file) return;
-  if (!requireAdmin()) return;
+  if (!file || !requireAdmin()) {
+    return;
+  }
 
   if (uploadInProgress) {
     showToast("Já existe um envio em andamento.");
@@ -868,8 +971,19 @@ async function uploadInlineFile(file, type) {
   const isImage = type === "image";
 
   const allowed = isImage
-    ? ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]
-    : ["video/mp4", "video/webm", "video/ogg", "video/quicktime"];
+    ? [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "image/avif"
+      ]
+    : [
+        "video/mp4",
+        "video/webm",
+        "video/ogg",
+        "video/quicktime"
+      ];
 
   if (!allowed.includes(file.type)) {
     showToast(
@@ -899,15 +1013,17 @@ async function uploadInlineFile(file, type) {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `articles-inline/${currentUser.uid}/${id}_${safeName}`;
 
-  const buttons = [
-    $("#uploadImageBtn"),
-    $("#uploadVideoBtn"),
-    $("#insertVideoLinkBtn")
+  const controls = [
+    $("#insertImageBtn"),
+    $("#insertVideoBtn"),
+    $("#editorImageInput"),
+    $("#editorVideoInput")
   ].filter(Boolean);
 
   uploadInProgress = true;
-  buttons.forEach(button => {
-    button.disabled = true;
+
+  controls.forEach(control => {
+    control.disabled = true;
   });
 
   try {
@@ -926,7 +1042,8 @@ async function uploadInlineFile(file, type) {
         snapshot => {
           const percent = snapshot.totalBytes
             ? Math.round(
-                snapshot.bytesTransferred / snapshot.totalBytes * 100
+                snapshot.bytesTransferred /
+                snapshot.totalBytes * 100
               )
             : 0;
 
@@ -935,7 +1052,7 @@ async function uploadInlineFile(file, type) {
             2500
           );
         },
-        error => reject(error),
+        reject,
         async () => {
           try {
             resolve(await getDownloadURL(task.snapshot.ref));
@@ -946,22 +1063,16 @@ async function uploadInlineFile(file, type) {
       );
     });
 
-    const caption =
-      $("#articleMediaCaption")?.value.trim() ||
-      file.name.replace(/\.[^.]+$/, "");
-
     inlineMediaDraft.push({
       id,
       type: isImage ? "image" : "video-upload",
       url,
-      caption,
+      caption: file.name.replace(/\.[^.]+$/, ""),
       name: file.name,
       storagePath: path
     });
 
     insertMarkerAtCursor(id);
-    renderInlineMediaManager();
-    updateInlinePreview();
 
     showToast(
       `${isImage ? "Imagem" : "Vídeo"} enviado e inserido na matéria.`
@@ -970,16 +1081,11 @@ async function uploadInlineFile(file, type) {
     console.error("Erro no upload do Firebase Storage:", error);
 
     const messages = {
-      "storage/unauthorized":
-        "O Firebase Storage recusou o envio. Confira as regras de acesso.",
-      "storage/canceled":
-        "O envio foi cancelado.",
-      "storage/retry-limit-exceeded":
-        "O limite de tentativas foi atingido. Confira sua conexão.",
-      "storage/quota-exceeded":
-        "A cota de armazenamento do Firebase foi excedida.",
-      "storage/unknown":
-        "Erro desconhecido no Storage. Consulte o Console do navegador."
+      "storage/unauthorized": "O Firebase Storage recusou o envio. Confira as regras de acesso.",
+      "storage/canceled": "O envio foi cancelado.",
+      "storage/retry-limit-exceeded": "O limite de tentativas foi atingido. Confira sua conexão.",
+      "storage/quota-exceeded": "A cota de armazenamento do Firebase foi excedida.",
+      "storage/unknown": "Erro desconhecido no Storage. Consulte o Console do navegador."
     };
 
     showToast(
@@ -990,82 +1096,119 @@ async function uploadInlineFile(file, type) {
   } finally {
     uploadInProgress = false;
 
-    buttons.forEach(button => {
-      button.disabled = false;
+    controls.forEach(control => {
+      control.disabled = false;
     });
 
-    if ($("#uploadImageInput")) $("#uploadImageInput").value = "";
-    if ($("#uploadVideoInput")) $("#uploadVideoInput").value = "";
+    if ($("#editorImageInput")) {
+      $("#editorImageInput").value = "";
+    }
+
+    if ($("#editorVideoInput")) {
+      $("#editorVideoInput").value = "";
+    }
   }
 }
 
 function insertVideoLinkAtCursor() {
-  if (!requireAdmin()) return;
+  if (!requireAdmin()) {
+    return;
+  }
 
   const input = $("#articleInlineVideoUrl");
   const url = input?.value.trim() || "";
 
   if (!url) {
-    showToast("Cole primeiro o link do vídeo.");
+    showToast("Cole o link do vídeo primeiro.");
     return;
   }
 
   if (!buildVideoEmbed(url)) {
     showToast(
-      "Link não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou MP4/WebM/OGG direto.",
+      "Link não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou um link direto MP4/WebM/OGG.",
       6000
     );
     return;
   }
 
   const id = `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const caption = $("#articleMediaCaption")?.value.trim() || "";
 
   inlineMediaDraft.push({
     id,
     type: "video-link",
     url,
-    caption,
-    name: url
+    caption: "",
+    name: url,
+    storagePath: ""
   });
 
   insertMarkerAtCursor(id);
-  renderInlineMediaManager();
-
   input.value = "";
 
   showToast("Vídeo inserido no ponto do cursor.");
 }
 
-function removeInlineMedia(id) {
-  inlineMediaDraft = inlineMediaDraft.filter(item => item.id !== id);
+async function cleanupUnusedStorageMedia(
+  previousMedia = [],
+  nextMedia = []
+) {
+  const nextPaths = new Set(
+    (Array.isArray(nextMedia) ? nextMedia : [])
+      .map(item => item.storagePath)
+      .filter(Boolean)
+  );
 
-  const field = $("#articleContent");
+  const oldPaths = [
+    ...new Set(
+      (Array.isArray(previousMedia) ? previousMedia : [])
+        .map(item => item.storagePath)
+        .filter(Boolean)
+    )
+  ];
 
-  if (field) {
-    field.value = field.value.replace(
-      new RegExp(`\\n?\\s*\\[\\[MEDIA:${id}\\]\\]\\s*`, "g"),
-      "\n\n"
-    );
+  for (const path of oldPaths) {
+    if (nextPaths.has(path)) {
+      continue;
+    }
+
+    try {
+      await deleteObject(storageRef(storage, path));
+    } catch (error) {
+      if (error?.code !== "storage/object-not-found") {
+        console.warn(
+          "Não foi possível limpar mídia antiga:",
+          path,
+          error
+        );
+      }
+    }
   }
-
-  renderInlineMediaManager();
-  updateInlinePreview();
 }
 
-/* SALVAMENTO DAS MATÉRIAS */
+/* SALVAR MATÉRIA OU RASCUNHO */
 
 function articleFromForm(status, existingArticle = null) {
-  const payload = {
+  const content = sanitizeArticleHTML(
+    $("#articleContent").innerHTML.trim()
+  );
+
+  const usedMedia = inlineMediaDraft.filter(item =>
+    content.includes(`[[MEDIA:${item.id}]]`)
+  );
+
+  return {
     title: $("#articleTitle").value.trim(),
     summary: $("#articleSummary").value.trim(),
     game: $("#articleGame").value,
     category: $("#articleCategory").value,
     image: $("#articleImage").value.trim(),
-    videoUrl: $("#articleVideoUrl")?.value.trim() || "",
-    content: $("#articleContent").value.trim(),
 
-    inlineMedia: inlineMediaDraft.map(item => ({
+    // Preserva links de vídeo antigos que já estejam salvos na matéria.
+    videoUrl: existingArticle?.videoUrl || existingArticle?.video || "",
+
+    content,
+
+    inlineMedia: usedMedia.map(item => ({
       id: item.id,
       type: item.type,
       url: item.url,
@@ -1075,31 +1218,46 @@ function articleFromForm(status, existingArticle = null) {
     })),
 
     status,
-    updatedAt: serverTimestamp()
+    updatedAt: serverTimestamp(),
+
+    ...(status === "published" && !existingArticle?.publishedAt
+      ? { publishedAt: serverTimestamp() }
+      : {})
   };
-
-  if (status === "published" && !existingArticle?.publishedAt) {
-    payload.publishedAt = serverTimestamp();
-  }
-
-  return payload;
 }
 
 async function saveArticle(event, status) {
   event?.preventDefault();
 
-  if (!requireAdmin()) return;
+  if (!requireAdmin()) {
+    return;
+  }
 
   const form = $("#articleForm");
 
-  if (!form.reportValidity()) return;
+  // Rascunhos podem ser salvos incompletos.
+  if (status === "published" && !form.reportValidity()) {
+    return;
+  }
 
-  const videoUrl = $("#articleVideoUrl")?.value.trim() || "";
+  const title = $("#articleTitle")?.value.trim() || "";
+  const summary = $("#articleSummary")?.value.trim() || "";
+  const contentText = $("#articleContent")?.innerText.trim() || "";
+  const contentHTML = $("#articleContent")?.innerHTML.trim() || "";
 
-  if (videoUrl && !buildVideoEmbed(videoUrl)) {
+  if (
+    status === "published" &&
+    (
+      !title ||
+      !summary ||
+      (
+        !contentText &&
+        !/\[\[MEDIA:[\w-]+\]\]/.test(contentHTML)
+      )
+    )
+  ) {
     showToast(
-      "Link de vídeo não reconhecido. Use YouTube, Vimeo, Dailymotion, Twitch, Kick ou MP4/WebM/OGG.",
-      6000
+      "Para publicar, preencha o título, o resumo e o conteúdo da matéria."
     );
     return;
   }
@@ -1114,6 +1272,7 @@ async function saveArticle(event, status) {
     : null;
 
   const payload = articleFromForm(status, existingArticle);
+  const wasEditing = Boolean(currentArticleId);
   const button = $("#saveArticleBtn");
 
   if (button) {
@@ -1146,10 +1305,24 @@ async function saveArticle(event, status) {
       );
     }
 
+    // Limpa arquivos que foram enviados, mas retirados do texto antes de salvar.
+    const previousMedia = [
+      ...(existingArticle?.inlineMedia || []),
+      ...inlineMediaDraft
+    ];
+
+    await cleanupUnusedStorageMedia(
+      previousMedia,
+      payload.inlineMedia
+    );
+
     resetArticleForm();
-    setAdminTab(status === "draft" ? "review" : "manage");
+
+    setAdminTab(
+      status === "draft" ? "review" : "manage"
+    );
   } catch (error) {
-    console.error("Erro ao salvar matéria no Firestore:", error);
+    console.error("Erro ao salvar matéria:", error);
 
     showToast(
       friendlyFirestoreError(error, "salvar a matéria"),
@@ -1158,30 +1331,14 @@ async function saveArticle(event, status) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = currentArticleId
+      button.textContent = wasEditing
         ? "Salvar alterações"
         : "Publicar matéria";
     }
   }
 }
 
-function friendlyFirestoreError(error, action) {
-  if (error?.code === "permission-denied") {
-    return `O Firebase recusou a permissão para ${action}. Confira as regras do Firestore.`;
-  }
-
-  if (error?.code === "unavailable") {
-    return "O Firebase está indisponível. Confira a conexão e tente novamente.";
-  }
-
-  if (error?.code === "failed-precondition") {
-    return "O Firestore informou uma pré-condição ausente. Veja o Console do navegador.";
-  }
-
-  return `Não foi possível ${action}. Código: ${error?.code || error?.message || "erro desconhecido"}.`;
-}
-
-/* FILAS DO PAINEL ADMINISTRATIVO */
+/* LISTAS DO PAINEL */
 
 function adminItem(article, mode) {
   const image = article.image
@@ -1190,47 +1347,92 @@ function adminItem(article, mode) {
 
   const status = article.status === "published"
     ? "Publicada"
-    : article.status === "review"
-      ? "Em revisão"
-      : "Rascunho";
+    : "Rascunho";
 
-  const actionButtons = mode === "review"
+  const actions = mode === "review"
     ? `
-      <button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">Aprovar e publicar</button>
-      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">Editar</button>
-      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">Excluir</button>
+      <button
+        class="primary-btn"
+        data-article-action="publish"
+        data-id="${escapeHTML(article.id)}"
+      >Publicar</button>
+
+      <button
+        class="secondary-btn"
+        data-article-action="edit"
+        data-id="${escapeHTML(article.id)}"
+      >Editar</button>
+
+      <button
+        class="secondary-btn danger-btn"
+        data-article-action="delete"
+        data-id="${escapeHTML(article.id)}"
+      >Excluir</button>
     `
     : `
-      <button class="secondary-btn" data-article-action="edit" data-id="${escapeHTML(article.id)}">Editar</button>
+      <button
+        class="secondary-btn"
+        data-article-action="edit"
+        data-id="${escapeHTML(article.id)}"
+      >Editar</button>
+
       ${
-        article.status !== "published"
-          ? `<button class="primary-btn" data-article-action="publish" data-id="${escapeHTML(article.id)}">Publicar</button>`
-          : `<button class="secondary-btn" data-article-action="draft" data-id="${escapeHTML(article.id)}">Tornar rascunho</button>`
+        article.status === "published"
+          ? `
+            <button
+              class="secondary-btn"
+              data-article-action="draft"
+              data-id="${escapeHTML(article.id)}"
+            >Tornar rascunho</button>
+          `
+          : `
+            <button
+              class="primary-btn"
+              data-article-action="publish"
+              data-id="${escapeHTML(article.id)}"
+            >Publicar</button>
+          `
       }
-      <button class="secondary-btn" data-article-action="delete" data-id="${escapeHTML(article.id)}">Excluir</button>
+
+      <button
+        class="secondary-btn danger-btn"
+        data-article-action="delete"
+        data-id="${escapeHTML(article.id)}"
+      >Excluir</button>
     `;
 
   return `
     <article class="admin-item">
       ${image}
+
       <div>
         <h3>${escapeHTML(article.title || "Sem título")}</h3>
-        <p>${escapeHTML(status)} · ${escapeHTML(gameLabel(article.game))} · ${escapeHTML(categoryLabel(article.category))}</p>
+        <p>
+          ${escapeHTML(status)} ·
+          ${escapeHTML(gameLabel(article.game))} ·
+          ${escapeHTML(categoryLabel(article.category))}
+        </p>
         <p>${escapeHTML(article.summary || "Sem resumo")}</p>
       </div>
-      <div class="admin-item-actions">${actionButtons}</div>
+
+      <div class="admin-item-actions">
+        ${actions}
+      </div>
     </article>
   `;
 }
 
-function renderReviewQueue() {
+function renderDraftsList() {
   const host = $("#reviewQueue");
 
-  if (!host) return;
+  if (!host) {
+    return;
+  }
 
   const items = sortNewest(
     allArticles.filter(article =>
-      article.status === "draft" || article.status === "review"
+      article.status === "draft" ||
+      article.status === "review"
     )
   );
 
@@ -1240,13 +1442,15 @@ function renderReviewQueue() {
 
   host.innerHTML = items.length
     ? items.map(article => adminItem(article, "review")).join("")
-    : `<p class="empty-state">Nenhum rascunho aguardando revisão.</p>`;
+    : `<p class="empty-state">Nenhum rascunho salvo.</p>`;
 }
 
 function renderPublishedManage() {
   const host = $("#publishedManage");
 
-  if (!host) return;
+  if (!host) {
+    return;
+  }
 
   const items = sortNewest(
     allArticles.filter(article => article.status === "published")
@@ -1260,13 +1464,17 @@ function renderPublishedManage() {
 async function handleArticleAction(event) {
   const button = event.target.closest("[data-article-action]");
 
-  if (!button || !requireAdmin()) return;
+  if (!button || !requireAdmin()) {
+    return;
+  }
 
   const id = button.dataset.id;
   const action = button.dataset.articleAction;
   const article = allArticles.find(item => item.id === id);
 
-  if (!article) return;
+  if (!article) {
+    return;
+  }
 
   try {
     if (action === "edit") {
@@ -1275,11 +1483,19 @@ async function handleArticleAction(event) {
     }
 
     if (action === "delete") {
-      if (!confirm(`Excluir a matéria “${article.title}”? Esta ação não pode ser desfeita.`)) {
+      if (!confirm(
+        `Excluir a matéria “${article.title}”? Esta ação não pode ser desfeita.`
+      )) {
         return;
       }
 
       await deleteDoc(doc(db, "articles", id));
+
+      await cleanupUnusedStorageMedia(
+        article.inlineMedia || [],
+        []
+      );
+
       showToast("Matéria excluída.");
     } else if (action === "publish") {
       const payload = {
@@ -1292,6 +1508,7 @@ async function handleArticleAction(event) {
       }
 
       await updateDoc(doc(db, "articles", id), payload);
+
       showToast("Matéria publicada.");
     } else if (action === "draft") {
       await updateDoc(doc(db, "articles", id), {
@@ -1311,10 +1528,12 @@ async function handleArticleAction(event) {
   }
 }
 
-/* FIRESTORE: NOTÍCIAS PÚBLICAS E PAINEL ADMINISTRATIVO */
+/* FIRESTORE */
 
 function startPublicListener() {
-  if (unsubscribePublic) unsubscribePublic();
+  if (unsubscribePublic) {
+    unsubscribePublic();
+  }
 
   const publishedQuery = query(
     articlesRef,
@@ -1324,41 +1543,31 @@ function startPublicListener() {
   unsubscribePublic = onSnapshot(
     publishedQuery,
     snapshot => {
-      const publicItems = snapshot.docs.map(item => ({
+      allArticles = snapshot.docs.map(item => ({
         id: item.id,
         ...item.data()
       }));
 
-      if (isAdmin) {
-        allArticles = [
-          ...allArticles.filter(article => article.status !== "published"),
-          ...publicItems
-        ];
-
-        allArticles = [
-          ...new Map(allArticles.map(article => [article.id, article])).values()
-        ];
-      } else {
-        allArticles = publicItems;
-      }
-
       renderHome();
 
-      if (isAdmin) {
-        renderReviewQueue();
-        renderPublishedManage();
+      const match = location.hash.match(/^#artigo\/(.+)$/);
+
+      if (match) {
+        const id = decodeURIComponent(match[1]);
+
+        if (allArticles.some(article => article.id === id)) {
+          openArticle(id);
+        }
       }
     },
     error => {
-      console.error("Erro ao carregar notícias públicas:", error);
+      console.error("Erro ao carregar notícias:", error);
 
-      const grid = $("#newsGrid");
-
-      if (grid) {
-        grid.innerHTML = `
+      if ($("#newsGrid")) {
+        $("#newsGrid").innerHTML = `
           <div class="empty-state">
-            Não foi possível carregar as notícias. Confira a conexão,
-            as regras do Firestore e o Console do navegador.
+            Não foi possível carregar as notícias.
+            Confira a conexão e as regras do Firestore.
           </div>
         `;
       }
@@ -1376,7 +1585,9 @@ function startPublicListener() {
 }
 
 function startAdminListener() {
-  if (unsubscribeAdmin) unsubscribeAdmin();
+  if (unsubscribeAdmin) {
+    unsubscribeAdmin();
+  }
 
   unsubscribeAdmin = onSnapshot(
     articlesRef,
@@ -1387,11 +1598,11 @@ function startAdminListener() {
       }));
 
       renderHome();
-      renderReviewQueue();
+      renderDraftsList();
       renderPublishedManage();
     },
     error => {
-      console.error("Erro ao carregar painel editorial:", error);
+      console.error("Erro ao carregar o painel editorial:", error);
 
       showToast(
         friendlyFirestoreError(error, "carregar o painel editorial"),
@@ -1400,8 +1611,6 @@ function startAdminListener() {
     }
   );
 }
-
-/* BOTÃO LOGIN / PAINEL ADM */
 
 function setAdminState(user) {
   currentUser = user;
@@ -1412,7 +1621,7 @@ function setAdminState(user) {
   if (adminButton) {
     adminButton.innerHTML = isAdmin
       ? `
-        <svg class="admin-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M15 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path>
           <circle cx="9" cy="7" r="4"></circle>
           <path d="M19 8v6M16 11h6"></path>
@@ -1420,7 +1629,7 @@ function setAdminState(user) {
         <span>Painel ADM</span>
       `
       : `
-        <svg class="admin-btn-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M15 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"></path>
           <circle cx="9" cy="7" r="4"></circle>
           <path d="M20 8v6M17 11h6"></path>
@@ -1432,7 +1641,10 @@ function setAdminState(user) {
   $("#logoutBtn")?.classList.toggle("hidden", !isAdmin);
 
   if (isAdmin) {
+    $("#homeView")?.classList.add("hidden");
+    $("#articleView")?.classList.add("hidden");
     $("#adminPanel")?.classList.remove("hidden");
+
     closeLogin();
 
     if (unsubscribePublic) {
@@ -1443,6 +1655,7 @@ function setAdminState(user) {
     startAdminListener();
   } else {
     $("#adminPanel")?.classList.add("hidden");
+    $("#homeView")?.classList.remove("hidden");
 
     if (unsubscribeAdmin) {
       unsubscribeAdmin();
@@ -1450,23 +1663,138 @@ function setAdminState(user) {
     }
 
     startPublicListener();
+  }
+}
 
-    if (user) {
-      signOut(auth).catch(error => {
-        console.error("Erro ao encerrar sessão não autorizada:", error);
-      });
+/* FORMATAÇÃO DO EDITOR */
+
+function applyEditorCommand(command) {
+  const editor = $("#articleContent");
+
+  if (!editor) {
+    return;
+  }
+
+  restoreEditorRange();
+
+  const commands = {
+    bold: "bold",
+    italic: "italic",
+    underline: "underline",
+    strikeThrough: "strikeThrough",
+    insertUnorderedList: "insertUnorderedList",
+    insertOrderedList: "insertOrderedList"
+  };
+
+  try {
+    if (commands[command]) {
+      document.execCommand(commands[command], false, null);
+    } else if (
+      ["p", "h2", "h3", "blockquote"].includes(command)
+    ) {
+      document.execCommand(
+        "formatBlock",
+        false,
+        ({
+          p: "P",
+          h2: "H2",
+          h3: "H3",
+          blockquote: "BLOCKQUOTE"
+        })[command]
+      );
+    } else if (command === "link") {
+      const raw = window.prompt(
+        "Cole o endereço completo do link (https://...):",
+        "https://"
+      );
+
+      if (!raw) {
+        return;
+      }
+
+      let url;
+
+      try {
+        url = new URL(raw.trim());
+
+        if (!["https:", "http:"].includes(url.protocol)) {
+          throw new Error("Protocolo inválido");
+        }
+      } catch {
+        showToast(
+          "Link inválido. Use um endereço que comece com https:// ou http://."
+        );
+        return;
+      }
+
+      document.execCommand("createLink", false, url.href);
+    } else {
+      return;
     }
+
+    editor.focus({ preventScroll: true });
+    saveEditorRange();
+
+    editor.dispatchEvent(
+      new Event("input", { bubbles: true })
+    );
+  } catch (error) {
+    console.error("Erro ao formatar o texto:", error);
+    showToast("Não foi possível aplicar essa formatação.");
   }
 }
 
 /* EVENTOS */
 
 function setupEvents() {
+  // Mantém o HTML atual e simplifica o nome da aba.
+  const draftsTab = $('[data-admin-tab="review"]');
+
+  if (draftsTab && draftsTab.querySelector(".tiny-count")) {
+    draftsTab.firstChild.textContent = "Rascunhos ";
+  }
+
+  // Adiciona o campo de vídeo por link sem exigir alteração do HTML.
+  const editorHint = $(".editor-hint");
+
+  if (editorHint && !$("#articleInlineVideoUrl")) {
+    const row = document.createElement("div");
+
+    row.className = "inline-video-link-row";
+
+    row.innerHTML = `
+      <input
+        id="articleInlineVideoUrl"
+        type="url"
+        inputmode="url"
+        aria-label="Link do vídeo"
+        placeholder="Link do YouTube, Vimeo, Twitch ou vídeo direto"
+      >
+
+      <button
+        type="button"
+        class="secondary-btn"
+        id="insertVideoLinkBtn"
+      >Inserir vídeo por link</button>
+    `;
+
+    editorHint.insertAdjacentElement("afterend", row);
+  }
+
   $("#adminBtn")?.addEventListener("click", () => {
     if (isAdmin && currentUser?.uid === ADMIN_UID) {
-      $("#homeView")?.classList.toggle("hidden");
-      $("#adminPanel")?.classList.toggle("hidden");
+      const panel = $("#adminPanel");
+      const openingPanel = panel?.classList.contains("hidden");
+
       $("#articleView")?.classList.add("hidden");
+
+      if (openingPanel) {
+        $("#homeView")?.classList.add("hidden");
+        panel?.classList.remove("hidden");
+      } else {
+        panel?.classList.add("hidden");
+        $("#homeView")?.classList.remove("hidden");
+      }
     } else {
       openLogin();
     }
@@ -1508,7 +1836,7 @@ function setupEvents() {
         );
       } else {
         closeLogin();
-        showToast("Login realizado. Carregando painel editorial...");
+        showToast("Login realizado.");
       }
     } catch (error) {
       console.error("Erro no login Firebase:", error);
@@ -1520,7 +1848,7 @@ function setupEvents() {
         "auth/wrong-password": "E-mail ou senha incorretos.",
         "auth/too-many-requests": "Muitas tentativas. Tente novamente mais tarde.",
         "auth/operation-not-allowed": "O login por e-mail/senha não está habilitado no Firebase Authentication.",
-        "auth/api-key-not-valid": "A chave de API foi recusada. Confira a configuração do projeto Firebase."
+        "auth/api-key-not-valid": "A chave de API foi recusada. Confira a configuração do Firebase."
       };
 
       setLoginError(
@@ -1556,45 +1884,136 @@ function setupEvents() {
 
   $("#cancelEditBtn")?.addEventListener("click", resetArticleForm);
 
-  $("#uploadImageBtn")?.addEventListener("click", () => {
-    $("#uploadImageInput")?.click();
+  const editor = $("#articleContent");
+  const toolbar = $(".editor-toolbar");
+
+  [
+    "keyup",
+    "mouseup",
+    "input",
+    "focus",
+    "click",
+    "touchend"
+  ].forEach(name => {
+    editor?.addEventListener(name, saveEditorRange);
   });
 
-  $("#uploadVideoBtn")?.addEventListener("click", () => {
-    $("#uploadVideoInput")?.click();
+  editor?.addEventListener("paste", () => {
+    setTimeout(saveEditorRange, 0);
   });
 
-  $("#uploadImageInput")?.addEventListener("change", event => {
-    uploadInlineFile(event.target.files?.[0], "image");
-  });
-
-  $("#uploadVideoInput")?.addEventListener("change", event => {
-    uploadInlineFile(event.target.files?.[0], "video");
-  });
-
-  $("#insertVideoLinkBtn")?.addEventListener("click", insertVideoLinkAtCursor);
-
-  $("#articleContent")?.addEventListener("input", updateInlinePreview);
-
-  $("#inlineMediaList")?.addEventListener("click", event => {
-    const button = event.target.closest("[data-remove-inline-media]");
-
-    if (button) {
-      removeInlineMedia(button.dataset.removeInlineMedia);
+  document.addEventListener("selectionchange", () => {
+    if (editor && document.activeElement === editor) {
+      saveEditorRange();
     }
+  });
+
+  toolbar?.addEventListener("pointerdown", event => {
+    const control = event.target.closest(
+      "[data-command], #editorLinkBtn, #insertImageBtn, #insertVideoBtn"
+    );
+
+    if (!control) {
+      return;
+    }
+
+    saveEditorRange();
+
+    if (control.matches("[data-command], #editorLinkBtn")) {
+      event.preventDefault();
+    }
+  });
+
+  toolbar?.addEventListener("click", event => {
+    const button = event.target.closest("[data-command]");
+
+    if (!button) {
+      return;
+    }
+
+    event.preventDefault();
+    applyEditorCommand(button.dataset.command);
+  });
+
+  $("#insertImageBtn")?.addEventListener("click", () => {
+    saveEditorRange();
+    $("#editorImageInput")?.click();
+  });
+
+  $("#insertVideoBtn")?.addEventListener("click", () => {
+    saveEditorRange();
+    $("#editorVideoInput")?.click();
+  });
+
+  $("#insertVideoLinkBtn")?.addEventListener(
+    "click",
+    insertVideoLinkAtCursor
+  );
+
+  $("#editorImageInput")?.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      uploadInlineFile(file, "image");
+    }
+
+    event.target.value = "";
+  });
+
+  $("#editorVideoInput")?.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+
+    if (file) {
+      uploadInlineFile(file, "video");
+    }
+
+    event.target.value = "";
+  });
+
+  $("#editorBlockFormat")?.addEventListener("change", event => {
+    applyEditorCommand(event.target.value);
+    event.target.value = "p";
+  });
+
+  $("#editorTextColor")?.addEventListener("change", event => {
+    if (!editor) {
+      return;
+    }
+
+    restoreEditorRange();
+
+    document.execCommand("styleWithCSS", false, true);
+    document.execCommand("foreColor", false, event.target.value);
+
+    saveEditorRange();
+
+    editor.dispatchEvent(
+      new Event("input", { bubbles: true })
+    );
+  });
+
+  $("#editorLinkBtn")?.addEventListener("click", () => {
+    applyEditorCommand("link");
   });
 
   document.addEventListener("click", event => {
     const button = event.target.closest("[data-admin-tab]");
 
-    if (!button) return;
-
-    event.preventDefault();
-    setAdminTab(button.dataset.adminTab);
+    if (button) {
+      event.preventDefault();
+      setAdminTab(button.dataset.adminTab);
+    }
   });
 
-  $("#reviewQueue")?.addEventListener("click", handleArticleAction);
-  $("#publishedManage")?.addEventListener("click", handleArticleAction);
+  $("#reviewQueue")?.addEventListener(
+    "click",
+    handleArticleAction
+  );
+
+  $("#publishedManage")?.addEventListener(
+    "click",
+    handleArticleAction
+  );
 
   $$("[data-category]").forEach(button => {
     button.addEventListener("click", () => {
@@ -1693,7 +2112,11 @@ function initialize() {
 
 try {
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initialize, { once: true });
+    document.addEventListener(
+      "DOMContentLoaded",
+      initialize,
+      { once: true }
+    );
   } else {
     initialize();
   }
