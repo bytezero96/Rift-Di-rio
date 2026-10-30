@@ -1934,3 +1934,490 @@ select option {
         padding: 13px;
       }
     }
+    
+/* ========================================= */
+/* RIFT DIÁRIO — REFINAMENTO DOS BOTÕES */
+/* ========================================= */
+
+/* Comportamento geral */
+button {
+    cursor: pointer;
+    font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+        color .2s ease,
+        background .2s ease,
+        border-color .2s ease,
+        box-shadow .2s ease,
+        transform .2s ease,
+        filter .2s ease;
+}
+
+button:focus-visible,
+.footer-link:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 3px;
+}
+
+/* Botões principais */
+.primary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 44px;
+    padding: 12px 20px;
+    border: 1px solid #ffda70;
+    border-radius: 7px;
+    background: linear-gradient(
+        135deg,
+        #ffe69b,
+        #f5bd36 55%,
+        #dfa21b
+    );
+    color: #17130a;
+    font-weight: 900;
+    letter-spacing: .5px;
+    box-shadow: 0 5px 18px #f5bd361c;
+}
+
+.primary-btn:hover:not(:disabled) {
+    filter: brightness(1.09);
+    transform: translateY(-2px);
+    box-shadow: 0 9px 25px #f5bd3635;
+}
+
+.primary-btn:active:not(:disabled) {
+    transform: translateY(0) scale(.98);
+}
+
+/* Botões secundários */
+.secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 10px 16px;
+    border: 1px solid #344760;
+    border-radius: 7px;
+    background: linear-gradient(145deg, #152238, #0e1828);
+    color: #d4deec;
+    font-weight: 800;
+}
+
+.secondary-btn:hover:not(:disabled) {
+    color: var(--gold);
+    background: #1c2b40;
+    border-color: var(--gold-border);
+    box-shadow: 0 4px 15px #00000025;
+    transform: translateY(-2px);
+}
+
+.secondary-btn:active:not(:disabled) {
+    transform: translateY(0) scale(.98);
+}
+
+/* Botão de login do cabeçalho */
+.admin-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 40px;
+    padding: 10px 17px;
+    border: 1px solid #756039;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #26364d, #171e2c);
+    color: #f5d78b;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .8px;
+    box-shadow: 0 4px 14px #00000025;
+}
+
+/* Ícone de usuário feito com CSS */
+.admin-btn::before {
+    content: "";
+    display: inline-block;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 17px;
+    background:
+        radial-gradient(
+            circle at 50% 28%,
+            currentColor 0 3px,
+            transparent 3.5px
+        ),
+        radial-gradient(
+            ellipse at 50% 105%,
+            currentColor 0 6px,
+            transparent 6.5px
+        );
+}
+
+.admin-btn:hover {
+    color: #fff0b5;
+    border-color: #e5bd65;
+    background: linear-gradient(135deg, #344760, #29251d);
+    box-shadow: 0 5px 18px #f5bd3620;
+    transform: translateY(-2px);
+}
+
+.admin-btn:active {
+    transform: translateY(0) scale(.97);
+}
+
+/* Botão de pesquisa */
+.icon-btn {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #304158;
+    border-radius: 7px;
+    background: #111b2b;
+    color: #cbd5e1;
+}
+
+.icon-btn:hover {
+    color: var(--gold);
+    background: #1b293d;
+    border-color: var(--gold-border);
+    transform: translateY(-2px);
+}
+
+/* Abas administrativas */
+.admin-tab {
+    border: 1px solid #304158;
+    border-radius: 7px;
+    background: #101b2b;
+    color: #aebbd0;
+    font-weight: 800;
+    transition: all .2s ease;
+}
+
+.admin-tab:hover {
+    color: var(--gold);
+    border-color: var(--gold-border);
+    background: #1b293d;
+}
+
+.admin-tab.active {
+    color: #f5d78b;
+    border-color: #80683b;
+    background: linear-gradient(135deg, #292a2a, #302719);
+    box-shadow: inset 0 -2px 0 #e5bd65;
+}
+
+/* Botões da barra do editor */
+.editor-toolbar button {
+    border: 1px solid #304158;
+    border-radius: 5px;
+    background: #152238;
+    color: #d2dbea;
+    transition: all .18s ease;
+}
+
+.editor-toolbar button:hover {
+    color: var(--gold);
+    border-color: var(--gold-border);
+    background: #223148;
+}
+
+/* Botão de texto */
+.text-btn {
+    border-radius: 6px;
+    transition: all .2s ease;
+}
+
+.text-btn:hover {
+    transform: translateY(-1px);
+}
+
+/* Botão de login do formulário */
+.login-submit {
+    min-height: 48px;
+    border-radius: 7px;
+    font-size: 15px;
+    letter-spacing: 1px;
+}
+
+/* Ícone da Riot Games no rodapé */
+.footer-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 10px 17px;
+    border: 1px solid #39465b;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #17243a, #0b1220);
+    color: #e8edf7;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: .7px;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: all .2s ease;
+}
+
+.riot-icon {
+    display: block;
+    width: 19px;
+    height: 19px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.footer-link:hover {
+    color: #fff0b5;
+    border-color: #a88a4d;
+    background: linear-gradient(135deg, #28364a, #171e2c);
+    box-shadow: 0 5px 16px #00000030;
+    transform: translateY(-2px);
+}
+
+/* Estados desabilitados */
+button:disabled {
+    cursor: not-allowed;
+    opacity: .55;
+    transform: none;
+    box-shadow: none;
+}
+/* ========================================= */
+/* AJUSTES DOS ÍCONES E BOTÃO LOGIN */
+/* ========================================= */
+
+/* ÍCONE DA RIOT GAMES */
+.footer-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.riot-icon {
+    display: inline-block;
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+
+    background-color: currentColor;
+
+    -webkit-mask: url("https://cdn.simpleicons.org/riotgames") center / contain no-repeat;
+    mask: url("https://cdn.simpleicons.org/riotgames") center / contain no-repeat;
+}
+
+/* ========================================= */
+/* BOTÃO LOGIN */
+/* ========================================= */
+
+.admin-btn {
+    position: relative;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 38px;
+    padding: 9px 15px 9px 38px;
+
+    color: #c4cfdf;
+    background: #111b2b;
+
+    border: 1px solid #304158;
+    border-radius: 8px;
+
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+
+    cursor: pointer;
+
+    transition:
+        color 0.2s ease,
+        background 0.2s ease,
+        border-color 0.2s ease,
+        transform 0.2s ease;
+}
+
+/* Cabeça do ícone */
+.admin-btn::before {
+    content: "";
+
+    position: absolute;
+    left: 14px;
+    top: 9px;
+
+    width: 7px;
+    height: 7px;
+
+    border: 1.6px solid currentColor;
+    border-radius: 50%;
+}
+
+/* Ombros do ícone */
+.admin-btn::after {
+    content: "";
+
+    position: absolute;
+    left: 11px;
+    top: 19px;
+
+    width: 13px;
+    height: 7px;
+
+    border: 1.6px solid currentColor;
+    border-bottom: 0;
+
+    border-radius: 10px 10px 0 0;
+}
+
+/* Efeito ao passar o mouse */
+.admin-btn:hover {
+    color: #ffffff;
+    background: #19283d;
+    border-color: #526781;
+
+    transform: translateY(-1px);
+}
+
+/* Foco acessível */
+.admin-btn:focus-visible {
+    outline: 2px solid var(--gold-soft);
+    outline-offset: 3px;
+}
+
+/* Clique */
+.admin-btn:active {
+    transform: translateY(0);
+}
+
+/* Ajuste para telas menores */
+@media (max-width: 600px) {
+    .admin-btn {
+        min-height: 36px;
+        padding: 8px 11px 8px 33px;
+        font-size: 11px;
+    }
+
+    .admin-btn::before {
+        left: 11px;
+        top: 8px;
+    }
+
+    .admin-btn::after {
+        left: 8px;
+        top: 18px;
+    }
+}
+
+/* ========================================= */
+/* RIFT DIÁRIO — PADRONIZAÇÃO DOS BOTÕES */
+/* ========================================= */
+
+:root {
+    --ui-icon-color: #c4cfdf;
+    --ui-hover-color: #e8c879;
+    --ui-background: #111b2b;
+    --ui-hover-background: #192438;
+    --ui-border: #29394f;
+    --ui-hover-border: #665a3d;
+}
+
+/* ESTILO NORMAL DOS BOTÕES DE ÍCONE E LINKS */
+.footer-social-link,
+.footer-link,
+.admin-btn,
+.icon-btn {
+    color: var(--ui-icon-color);
+    background: var(--ui-background);
+    border: 1px solid var(--ui-border);
+    transition:
+        color .2s ease,
+        background .2s ease,
+        border-color .2s ease,
+        transform .2s ease;
+}
+
+/* PADRONIZAÇÃO DO HOVER */
+.footer-social-link:hover,
+.footer-link:hover,
+.admin-btn:hover,
+.icon-btn:hover {
+    color: var(--ui-hover-color);
+    background: var(--ui-hover-background);
+    border-color: var(--ui-hover-border);
+    transform: translateY(-1px);
+}
+
+/* ÍCONES SOCIAIS */
+.footer-social-link svg,
+.riot-icon {
+    color: inherit;
+}
+
+/* BOTÃO LOGIN */
+.admin-btn {
+    box-shadow: none;
+}
+
+/* LUPA DE PESQUISA — MAIS DISCRETA */
+.icon-btn {
+    padding: 10px;
+    background: #111b2b80;
+    border-color: #29394f80;
+    box-shadow: none;
+}
+
+.icon-btn svg {
+    color: inherit;
+    stroke: currentColor;
+    stroke-width: 1.8;
+}
+
+/* HOVER DA LUPA */
+.icon-btn:hover {
+    background: var(--ui-hover-background);
+    border-color: var(--ui-hover-border);
+}
+
+/* FOCO DE ACESSIBILIDADE */
+.footer-social-link:focus-visible,
+.footer-link:focus-visible,
+.admin-btn:focus-visible,
+.icon-btn:focus-visible {
+    outline: 2px solid var(--ui-hover-color);
+    outline-offset: 3px;
+}
+
+/* CLIQUE */
+.footer-social-link:active,
+.footer-link:active,
+.admin-btn:active,
+.icon-btn:active {
+    transform: translateY(0);
+}
+/* BUSCA — AJUSTE DO CAMPO DE PESQUISA */
+
+#searchInput,
+.search-input,
+input[type="search"] {
+    outline: none;
+    box-shadow: none;
+    border: 1px solid #34445b;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Campo selecionado */
+#searchInput:focus,
+.search-input:focus,
+input[type="search"]:focus {
+    outline: none;
+    border-color: #b99a52;
+    box-shadow: 0 0 0 2px rgba(185, 154, 82, 0.10);
+}
